@@ -172,5 +172,22 @@ def game():
     g.close()
 
 
+def engine_available():
+    """The engine needs the game's DLLs (./setup.sh copies them to lib/) and a build."""
+    from engine import built_engine_dll
+    return os.path.isfile(os.path.join(ROOT, "lib", "sts2.dll")) and built_engine_dll() is not None
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running end-to-end test")
+    config.addinivalue_line("markers", "engine: needs the game DLLs and a built engine")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Without the (proprietary) game DLLs, e.g. in CI, only the engine-free tests run."""
+    if engine_available():
+        return
+    skip = pytest.mark.skip(reason="needs the game DLLs (./setup.sh) and a built engine")
+    for item in items:
+        if {"game", "env"} & set(getattr(item, "fixturenames", ())) or item.get_closest_marker("engine"):
+            item.add_marker(skip)

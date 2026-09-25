@@ -109,10 +109,11 @@ def fight(d=None):
         blk = d.get("player",{}).get("block",0) if "player" in d else 0
         inc = calc_incoming(enemies)
         # Use potions when critical
-        potions = d.get("potions", [])
+        potions = d.get("player", {}).get("potions", [])
         if potions and (hp < 20 or (inc > hp and blk == 0)):
             for pi, pot in enumerate(potions):
-                pname = pot.get("name", {}).get("en", "")
+                pi = pot.get("index", pi)
+                pname = pot.get("name") or ""
                 ptt = pot.get("target_type", "")
                 if "Heal" in pname or "Block" in pname or "Regen" in pname or "Fairy" in pname:
                     r = action("use_potion", potion_index=pi)

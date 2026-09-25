@@ -140,6 +140,7 @@ def test_engine_death_needs_reset(env):
     assert env.step(0)[0]["type"] == "decision"
 
 
+@pytest.mark.engine
 def test_close_ends_the_engine():
     e = Sts2Env()
     e.reset(seed=5)
@@ -157,6 +158,7 @@ def test_engine_echoes_request_id(game):
     assert game.send({"cmd": "get_state", "request_id": "x"})["request_id"] == "x"
 
 
+@pytest.mark.engine
 def test_vec_env_autoreset():
     with Sts2VecEnv(2, max_steps=3) as venv:
         obs, infos = venv.reset(seed=10)
@@ -167,6 +169,7 @@ def test_vec_env_autoreset():
         assert all("final_observation" in i and i["steps"] == 0 for i in infos)
 
 
+@pytest.mark.engine
 @pytest.mark.parametrize("character", VALID_CHARACTERS)
 def test_random_agent_actions_are_accepted(character):
     with Sts2Env(debug=True, max_steps=400) as e:

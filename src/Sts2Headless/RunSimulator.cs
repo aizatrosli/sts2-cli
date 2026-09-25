@@ -3155,6 +3155,7 @@ public partial class RunSimulator
             ["floor"] = _runState.ActFloor,
             ["room_type"] = _runState.CurrentRoom?.RoomType.ToString(),
             ["seed"] = _runState.Rng?.StringSeed,
+            ["character"] = _runState.Players.FirstOrDefault()?.Character?.Id.Entry,
             ["ascension"] = _runState.AscensionLevel,
             ["total_floor"] = _runState.TotalFloor,
             ["flow"] = _manualFlow ? "manual" : "auto",

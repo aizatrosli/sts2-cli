@@ -1,5 +1,4 @@
 """Tests for map navigation."""
-import pytest
 
 
 class TestMapStructure:

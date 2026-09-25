@@ -51,7 +51,6 @@ def pick_best_card(hand, enemies, osty, energy, rnd, inc, player_block=0, player
 
         # Priority scoring (lower = play first)
         is_block_card = ctype == "Skill" and tt != "AnyEnemy" and name not in ["Bodyguard", "Wisp", "Borrowed Time"]
-        block_val = (c.get("stats") or {}).get("block", 0)
 
         if cost == 0:
             p = 1  # 0-cost ALWAYS first (Wisp, Borrowed Time, etc)
@@ -222,7 +221,7 @@ def handle_shop(d):
         cost = c["cost"]
         if name in priority_names and cost <= gold:
             print(f"  BUY: {c['name']} ({cost}g)")
-            result = action("buy_card", card_index=c["index"])
+            action("buy_card", card_index=c["index"])
             gold -= cost
             deck_size += 1
 
@@ -231,7 +230,7 @@ def handle_shop(d):
         print(f"  REMOVE: Strike ({removal_cost}g)")
         action("remove_card")
         # Select first Strike
-        result = action("select_cards", indices="0")
+        action("select_cards", indices="0")
         gold -= removal_cost
 
     return action("leave_room")
@@ -270,12 +269,10 @@ def handle_map(d):
     player = d["player"]
     hp_pct = player["hp"] / player["max_hp"]
     choices = d.get("choices", [])
-    floor = d.get("act", 1) * 17 + d.get("floor", 0)  # rough
     floor = d["context"]["floor"]
-
     deck = player.get("deck", [])
     deck_names = {c["name"] for c in deck}
-    has_scaling = bool(deck_names & {"Calcify", "Flatten", "Sic 'Em", "Drain Power"})
+
 
     # Priority: Treasure > RestSite > Shop > Monster > Unknown > Elite
     type_priority = {
@@ -321,8 +318,7 @@ def handle_event(d):
 
 def use_potions_at_boss(d):
     """Use all potions at boss/elite fights."""
-    potions = d.get("potions", [])
-    enemies = d.get("enemies", [])
+    potions = d.get("player", {}).get("potions", [])
     for pot in potions:
         tt = pot.get("target_type", "")
         pi = pot["index"]

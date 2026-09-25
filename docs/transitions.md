@@ -134,7 +134,7 @@ star icons written `[E]` and `[star]`.
   every reward its `reward_text`. Shop rows have `price` (gold); shop cards keep `cost` as the
   gold price for compatibility and give the energy cost as `card_cost`.
 * **`context`**: `act`, `act_id`, `act_name`, `floor`, `total_floor`, `room_type`, `seed`,
-  `ascension`, `flow`, `boss` and `second_boss`. `map_select` embeds the full `map`.
+  `character`, `ascension`, `flow`, `boss` and `second_boss`. `map_select` embeds the full `map`.
 
 Debug commands (`set_player`, `enter_room`, `set_draw_order`) are accepted only when the engine
 starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.

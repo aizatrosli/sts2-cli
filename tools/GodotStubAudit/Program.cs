@@ -8,6 +8,9 @@
 // attributes) and gaps are reported by tier:
 //   gameplay  referenced from anything that is neither UI nor tooling (Models, Commands,
 //             Combat, Entities, Events, Rewards, Runs, Saves, Helpers, ...) — fix these
+//   reachable-ui  referenced only from UI code, but from a UI method that gameplay code
+//             calls directly or through one other method (2 call edges); these run
+//             headless when the UI guard around them is missing — check them
 //   tooling   referenced only from dev/debug/test code (DevConsole, AutoSlay, ...)
 //   ui        referenced only from UI code (Nodes.*, addons, rich-text effects, ...)
 //
@@ -106,23 +109,42 @@ internal static class Program
         Tier TierOf(string ns) =>
             uiPrefixes.Any(p => Under(ns, p)) ? Tier.Ui : toolPrefixes.Any(p => Under(ns, p)) ? Tier.Tooling : Tier.Gameplay;
         // A reference with no attributed use is counted as gameplay: we cannot rule it out.
-        Tier TierOfAll(Dictionary<string, int> origins) => origins.Count == 0 ? Tier.Gameplay : origins.Keys.Min(TierOf);
+        Tier TierOfOrigins(Dictionary<string, int> origins) => origins.Count == 0 ? Tier.Gameplay : origins.Keys.Min(TierOf);
+
+        // UI methods that gameplay code calls, directly or through one other method.
+        foreach (var (method, ns) in refs.MethodNamespace)
+        {
+            if (TierOf(ns) != Tier.Gameplay) continue;
+            foreach (var c1 in refs.CallsFrom(method))
+            {
+                if (TierOf(refs.MethodNamespace.GetValueOrDefault(c1, "")) == Tier.Ui)
+                    refs.MarkReachable(c1, $"{refs.MethodName(method)} → {refs.MethodName(c1)}");
+                foreach (var c2 in refs.CallsFrom(c1))
+                {
+                    if (TierOf(refs.MethodNamespace.GetValueOrDefault(c2, "")) == Tier.Ui)
+                        refs.MarkReachable(c2, $"{refs.MethodName(method)} → {refs.MethodName(c1)} → {refs.MethodName(c2)}");
+                }
+            }
+        }
+        Tier TierOfType(TypeRefInfo t) => TierOfOrigins(t.Origins) is var x && x == Tier.Ui && t.ReachableVia != null ? Tier.ReachableUi : x;
+        Tier TierOfMember(MemberRefInfo m) => TierOfOrigins(m.Origins) is var x && x == Tier.Ui && m.ReachableVia != null ? Tier.ReachableUi : x;
+        static string TierName(Tier t) => t == Tier.ReachableUi ? "reachable-ui" : t.ToString().ToLowerInvariant();
 
         var missingTypes = refs.Types.Values.Where(t => !t.Present).OrderBy(t => t.Name).ToList();
         var missingMembers = refs.Members.Values.Where(m => !m.Present).OrderBy(m => m.Display).ToList();
-        int Count<T>(IEnumerable<T> xs, Func<T, Dictionary<string, int>> o, Tier tier) => xs.Count(x => TierOfAll(o(x)) == tier);
+        int Count<T>(IEnumerable<T> xs, Func<T, Tier> tierOf, Tier tier) => xs.Count(x => tierOf(x) == tier);
 
         Console.WriteLine($"sts2:  {sts2Path}");
         Console.WriteLine($"stub:  {stubPath}");
         Console.WriteLine();
-        Console.WriteLine($"{"",-22}{"referenced",11}{"missing",9}{"gameplay",10}{"tooling",9}{"ui",6}");
-        foreach (var (label, total, missing, orig) in new[]
+        Console.WriteLine($"{"",-22}{"referenced",11}{"missing",9}{"gameplay",10}{"reachable-ui",14}{"tooling",9}{"ui",6}");
+        foreach (var (label, total, missing, tierOf) in new[]
                  {
-                     ("GodotSharp types", refs.Types.Count, missingTypes.Cast<object>().ToList(), (Func<object, Dictionary<string, int>>)(x => ((TypeRefInfo)x).Origins)),
-                     ("GodotSharp members", refs.Members.Count, missingMembers.Cast<object>().ToList(), x => ((MemberRefInfo)x).Origins),
+                     ("GodotSharp types", refs.Types.Count, missingTypes.Cast<object>().ToList(), (Func<object, Tier>)(x => TierOfType((TypeRefInfo)x))),
+                     ("GodotSharp members", refs.Members.Count, missingMembers.Cast<object>().ToList(), x => TierOfMember((MemberRefInfo)x)),
                  })
         {
-            Console.WriteLine($"{label,-22}{total,11}{missing.Count,9}{Count(missing, orig, Tier.Gameplay),10}{Count(missing, orig, Tier.Tooling),9}{Count(missing, orig, Tier.Ui),6}");
+            Console.WriteLine($"{label,-22}{total,11}{missing.Count,9}{Count(missing, tierOf, Tier.Gameplay),10}{Count(missing, tierOf, Tier.ReachableUi),14}{Count(missing, tierOf, Tier.Tooling),9}{Count(missing, tierOf, Tier.Ui),6}");
         }
 
         string Origins(Dictionary<string, int> o) => o.Count == 0 ? "(no attributed use)" : string.Join(", ",
@@ -131,10 +153,14 @@ internal static class Program
 
         void PrintTypes(Tier tier)
         {
-            var list = missingTypes.Where(t => TierOfAll(t.Origins) == tier).ToList();
+            var list = missingTypes.Where(t => TierOfType(t) == tier).ToList();
             Console.WriteLine();
-            Console.WriteLine($"== Missing types, {tier.ToString().ToLowerInvariant()} ({list.Count}) ==");
-            foreach (var t in list) Console.WriteLine($"  {t.Name}\n      from: {Origins(t.Origins)}");
+            Console.WriteLine($"== Missing types, {TierName(tier)} ({list.Count}) ==");
+            foreach (var t in list)
+            {
+                Console.WriteLine($"  {t.Name}\n      from: {Origins(t.Origins)}");
+                if (tier == Tier.ReachableUi) Console.WriteLine($"      via:  {t.ReachableVia}");
+            }
         }
         void PrintMembers(string title, IEnumerable<MemberRefInfo> members)
         {
@@ -147,13 +173,14 @@ internal static class Program
                 if (!string.IsNullOrEmpty(m.Note)) Console.WriteLine($"      stub: {m.Note}");
                 if (real?.Find(m).match is { } rm) Console.WriteLine($"      real: {StubIndex.Describe(rm)}");
                 Console.WriteLine($"      from: {Origins(m.Origins)}");
+                if (TierOfMember(m) == Tier.ReachableUi) Console.WriteLine($"      via:  {m.ReachableVia}");
             }
         }
 
-        foreach (var tier in listAll ? new[] { Tier.Gameplay, Tier.Tooling, Tier.Ui } : new[] { Tier.Gameplay })
+        foreach (var tier in listAll ? new[] { Tier.Gameplay, Tier.ReachableUi, Tier.Tooling, Tier.Ui } : new[] { Tier.Gameplay, Tier.ReachableUi })
         {
             PrintTypes(tier);
-            PrintMembers($"Missing members, {tier.ToString().ToLowerInvariant()}", missingMembers.Where(m => TierOfAll(m.Origins) == tier));
+            PrintMembers($"Missing members, {TierName(tier)}", missingMembers.Where(m => TierOfMember(m) == tier));
         }
         var enumIssues = new List<string>();
         if (real != null)
@@ -171,7 +198,7 @@ internal static class Program
                     .Select(kv => have.TryGetValue(kv.Key, out var v) ? $"{kv.Key}={v} (real {kv.Value})" : $"{kv.Key} missing (real {kv.Value})")
                     .Concat(have.Keys.Except(want.Keys).Select(k => $"{k}={have[k]} (not in real)")));
                 if (diffs.Count > 0)
-                    enumIssues.Add($"  {t.Name} [{TierOfAll(t.Origins).ToString().ToLowerInvariant()}]: {string.Join(", ", diffs.Take(8))}{(diffs.Count > 8 ? $", +{diffs.Count - 8} more" : "")}");
+                    enumIssues.Add($"  {t.Name} [{TierName(TierOfType(t))}]: {string.Join(", ", diffs.Take(8))}{(diffs.Count > 8 ? $", +{diffs.Count - 8} more" : "")}");
             }
             Console.WriteLine();
             Console.WriteLine($"== Enums whose stub values differ from the real assembly ({enumIssues.Count}) ==");
@@ -190,12 +217,12 @@ internal static class Program
                 toolPrefixes,
                 types = refs.Types.Values.OrderBy(t => t.Name).Select(t => new
                 {
-                    name = t.Name, present = t.Present, tier = TierOfAll(t.Origins).ToString().ToLowerInvariant(), origins = t.Origins,
+                    name = t.Name, present = t.Present, tier = TierName(TierOfType(t)), origins = t.Origins, via = t.ReachableVia,
                 }),
                 members = refs.Members.Values.OrderBy(m => m.Display).Select(m => new
                 {
                     type = m.TypeName, kind = m.Kind, name = m.Name, signature = m.Display,
-                    present = m.Present, note = m.Note, tier = TierOfAll(m.Origins).ToString().ToLowerInvariant(), origins = m.Origins,
+                    present = m.Present, note = m.Note, tier = TierName(TierOfMember(m)), origins = m.Origins, via = m.ReachableVia,
                 }),
             };
             File.WriteAllText(jsonPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
@@ -203,12 +230,12 @@ internal static class Program
             Console.WriteLine($"JSON report: {jsonPath}");
         }
 
-        bool gameplayGap = missingTypes.Any(t => TierOfAll(t.Origins) == Tier.Gameplay)
-                           || missingMembers.Any(m => TierOfAll(m.Origins) == Tier.Gameplay);
+        bool gameplayGap = missingTypes.Any(t => TierOfType(t) == Tier.Gameplay)
+                           || missingMembers.Any(m => TierOfMember(m) == Tier.Gameplay);
         return fail && (gameplayGap || enumIssues.Count > 0) ? 1 : 0;
     }
 
-    private enum Tier { Gameplay, Tooling, Ui }
+    private enum Tier { Gameplay, ReachableUi, Tooling, Ui }
 
     private static string FindRepoRoot()
     {
@@ -225,6 +252,7 @@ internal sealed class TypeRefInfo
     public required string Name;
     public readonly Dictionary<string, int> Origins = new();
     public bool Present;
+    public string? ReachableVia;              // gameplay → UI call path, when used by a reachable UI method
 }
 
 internal sealed class MemberRefInfo
@@ -239,6 +267,7 @@ internal sealed class MemberRefInfo
     public readonly Dictionary<string, int> Origins = new();
     public bool Present;
     public string? Note;
+    public string? ReachableVia;
 
     public string Display => Kind == "field"
         ? $"{TypeName}::{Name} : {ReturnType}"
@@ -252,6 +281,36 @@ internal sealed class ReferenceScanner
 {
     public readonly Dictionary<string, TypeRefInfo> Types = new();
     public readonly Dictionary<string, MemberRefInfo> Members = new();
+    /// <summary>Namespace (of the outermost declaring type) of every method with a body.</summary>
+    public readonly Dictionary<MethodDefinitionHandle, string> MethodNamespace = new();
+    private readonly Dictionary<MethodDefinitionHandle, HashSet<MethodDefinitionHandle>> _calls = new();
+    private readonly Dictionary<MethodDefinitionHandle, HashSet<object>> _methodRefs = new(); // TypeRefInfo / MemberRefInfo
+    private MethodDefinitionHandle? _method;
+
+    public IEnumerable<MethodDefinitionHandle> CallsFrom(MethodDefinitionHandle m) =>
+        _calls.TryGetValue(m, out var c) ? c : Enumerable.Empty<MethodDefinitionHandle>();
+
+    /// <summary>Every Godot reference made by <paramref name="m"/> is reachable from gameplay.</summary>
+    public void MarkReachable(MethodDefinitionHandle m, string via)
+    {
+        if (!_methodRefs.TryGetValue(m, out var used)) return;
+        foreach (var r in used)
+        {
+            if (r is TypeRefInfo t) t.ReachableVia ??= via;
+            else if (r is MemberRefInfo mr) mr.ReachableVia ??= via;
+        }
+    }
+
+    // Names are captured during the scan: the metadata is gone once Scan returns.
+    private readonly Dictionary<MethodDefinitionHandle, string> _methodNames = new();
+    public string MethodName(MethodDefinitionHandle h) => _methodNames.GetValueOrDefault(h, "?");
+
+    private void NoteUse(object info)
+    {
+        if (_method is not { } m) return;
+        if (!_methodRefs.TryGetValue(m, out var set)) _methodRefs[m] = set = new();
+        set.Add(info);
+    }
 
     private readonly MetadataReader _md;
     private readonly HashSet<AssemblyReferenceHandle> _godotAsm = new();
@@ -370,8 +429,12 @@ internal sealed class ReferenceScanner
             foreach (var mh in td.GetMethods())
             {
                 var m = _md.GetMethodDefinition(mh);
+                _method = mh;
+                MethodNamespace[mh] = ns;
+                _methodNames[mh] = $"{_md.GetString(td.Name)}::{_md.GetString(m.Name)}";
                 m.DecodeSignature(collector, null);
                 if (m.RelativeVirtualAddress != 0) ScanBody(pe.GetMethodBody(m.RelativeVirtualAddress), ns, collector);
+                _method = null;
             }
         }
         foreach (var ch in _md.CustomAttributes)
@@ -413,11 +476,23 @@ internal sealed class ReferenceScanner
                 case OperandType.InlineMethod:
                 case OperandType.InlineTok:
                 case OperandType.InlineType:
-                    NoteEntity(MetadataTokens.EntityHandle(il.ReadInt32()), ns, collector);
+                    var operand = MetadataTokens.EntityHandle(il.ReadInt32());
+                    NoteCall(operand);
+                    NoteEntity(operand, ns, collector);
                     break;
                 default: il.Offset += 4; break;
             }
         }
+    }
+
+    /// <summary>Call graph edge from the current method to a method of this assembly.</summary>
+    private void NoteCall(EntityHandle h)
+    {
+        if (_method is not { } from) return;
+        if (h.Kind == HandleKind.MethodSpecification) h = _md.GetMethodSpecification((MethodSpecificationHandle)h).Method;
+        if (h.Kind != HandleKind.MethodDefinition) return;
+        if (!_calls.TryGetValue(from, out var set)) _calls[from] = set = new();
+        set.Add((MethodDefinitionHandle)h);
     }
 
     private void NoteEntity(EntityHandle h, string ns, TypeRefCollector collector)
@@ -426,7 +501,7 @@ internal sealed class ReferenceScanner
         {
             case HandleKind.MemberReference:
                 var mrh = (MemberReferenceHandle)h;
-                if (_godotMemberRefs.TryGetValue(mrh, out var info)) Bump(info.Origins, ns);
+                if (_godotMemberRefs.TryGetValue(mrh, out var info)) { Bump(info.Origins, ns); NoteUse(info); }
                 var mr = _md.GetMemberReference(mrh);
                 NoteEntity(mr.Parent, ns, collector);
                 if (mr.GetKind() == MemberReferenceKind.Method) mr.DecodeMethodSignature(collector, null);
@@ -448,7 +523,7 @@ internal sealed class ReferenceScanner
 
     internal void NoteType(TypeReferenceHandle h, string ns)
     {
-        if (_godotTypeRefs.TryGetValue(h, out var name)) Bump(Types[name].Origins, ns);
+        if (_godotTypeRefs.TryGetValue(h, out var name)) { Bump(Types[name].Origins, ns); NoteUse(Types[name]); }
     }
 
     private static void Bump(Dictionary<string, int> d, string key) => d[key] = d.GetValueOrDefault(key) + 1;

@@ -73,7 +73,34 @@ dotnet run --project src/Sts2Headless/Sts2Headless.csproj
 {"cmd": "quit"}
 ```
 
-Each command returns a JSON decision point (`map_select` / `combat_play` / `card_reward` / `rest_site` / `event_choice` / `shop` / `game_over`). All names are in English.
+The engine prints `{"type": "ready", "schema_version": 2, "debug_commands": false, ...}` on
+start, then answers each command line with one JSON line. All names are in English.
+
+| command | arguments | response |
+|---|---|---|
+| `start_run` | `character`, `seed` (optional; random when missing, canonicalized like the game), `ascension` 0–10, `flow` `auto`/`manual`, `act1` | first decision |
+| `action` | `action`, `args` (one of the decision's `legal_actions`) | next decision, or `error` |
+| `get_state` | — | the current decision again |
+| `get_map` | — | `map` (all nodes, edges, visited path, boss) |
+| `load_save` | `path` or `json`, `flow` | decision where the save resumes |
+| `write_continue_save` | `path` | `save_result` (`success`, `path`, `size`, `room_type`) |
+| `quit` | `path` (optional: save first) | `quit_result`, or `save_error` if the save failed (the engine keeps running) |
+| `set_player` * | `hp`, `max_hp`, `gold`, `deck`, `relics`, `potions` (ids) | `ok` |
+| `enter_room` * | `type` (`monster`/`combat`, `elite`, `event`, `rest`, `shop`, `treasure`), `encounter`, `event` | decision in that room |
+| `set_draw_order` * | `cards` (ids, top first) | `ok` |
+
+\* Debug commands, accepted only when the engine starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.
+Any command may carry a `request_id`, which the response echoes.
+
+Response `type`s: `ready`, `decision` (with `decision` naming the screen and `legal_actions`),
+`error` (`message`; an illegal action also names the `decision`), `map`, `ok`, `save_result`,
+`save_error`, `quit_result`. Responses can carry `warnings` (engine errors during the step) and,
+on `start_run`/`load_save`, `patch_warnings` (Harmony patches that did not apply).
+
+Decisions: `map_select`, `combat_play`, `card_select`, `bundle_select`, `card_reward`,
+`event_choice`, `rest_site`, `shop`, `fake_merchant`, `crystal_sphere`, `game_over`, and in
+manual flow `rewards` and `treasure`. [docs/transitions.md](docs/transitions.md) lists each
+decision's actions and fields.
 
 ### RL / UI-faithful mode
 
@@ -88,6 +115,28 @@ Every decision includes `legal_actions`, a list of ready-to-send action bodies f
 A run has three acts, as in single player. Act 1 is Overgrowth or Underdocks, rolled from the seed the way the game's lobby does; pass `"act1": "overgrowth"` or `"act1": "underdocks"` to pin it. Act 2 is the Hive and act 3 is Glory. `context.act_id` names the current act.
 
 `python/sts2_env.py` wraps this in a Gymnasium-style `reset()` / `step()` API with action masks, a vectorized env and crash recovery. See [docs/transitions.md](docs/transitions.md) for the full state machine.
+
+## Tests and CI
+
+`CLAUDE.md` lists the validation gate every change must pass (regression runs for all
+characters, manual-flow random-agent runs, `pytest tests`, the legal-action fuzzer).
+
+GitHub Actions (`.github/workflows/ci.yml`) cannot run the engine: the game's DLLs are
+proprietary and cannot be stored in the repository or in CI. It runs lint, the engine-free
+tests (tests that need the game skip themselves when `lib/sts2.dll` or the engine build is
+missing) and the builds of `src/GodotStubs` and the audit tools.
+
+For the full suite in CI, register a self-hosted runner on a machine with the game installed:
+
+1. Install the runner (repository Settings → Actions → Runners → New self-hosted runner) and
+   give it a label, e.g. `sts2`.
+2. On that machine install .NET 9 and Python 3 with `pytest`, and run
+   `./setup.sh /path/to/game/data` once so `lib/` holds the game DLLs.
+3. Add a job with `runs-on: [self-hosted, sts2]` and `STS2_GAME_DIR` set to the game's data
+   directory. It runs `./setup.sh` (which reads `STS2_GAME_DIR`, so a game update is picked
+   up), `dotnet build src/Sts2Headless/Sts2Headless.csproj` and the commands from the
+   validation gate in `CLAUDE.md`. With `STS2_GAME_DIR` set, the stub tests also compare
+   against the real `GodotSharp.dll`.
 
 ## Game Logs
 

@@ -7,7 +7,7 @@ Log files are stored in <project_root>/logs/ with auto-cleanup of old files.
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(ROOT, "logs")
@@ -51,6 +51,21 @@ class GameLogger:
         filename = f"{ts}_{character}_{safe_seed}.jsonl"
         self._path = os.path.join(LOG_DIR, filename)
         self._file = open(self._path, "w")
+
+    def rename(self, character: str, seed: str):
+        """Name the log after the run it turned out to be (e.g. once a save is loaded)."""
+        if not self.enabled or not self._file:
+            return
+        base = os.path.basename(self._path)
+        ts = base.split("_", 2)[0] + "_" + base.split("_", 2)[1]
+        safe_seed = str(seed).replace("/", "_")
+        new_path = os.path.join(LOG_DIR, f"{ts}_{character}_{safe_seed}.jsonl")
+        if new_path == self._path:
+            return
+        self._file.close()
+        os.replace(self._path, new_path)
+        self._path = new_path
+        self._file = open(self._path, "a")
 
     def log_state(self, state: dict):
         """Log a state/decision point received from the simulator."""

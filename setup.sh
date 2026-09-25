@@ -109,12 +109,16 @@ fi
 
 # ── Detect .NET SDK ──
 
+# Same search order as python/engine.py: $DOTNET, $DOTNET_ROOT, ~/.dotnet, ~/.dotnet-arm64, PATH.
+USER_DOTNET="${DOTNET:+$(command -v "$DOTNET" 2>/dev/null || echo "$DOTNET")}"
 DOTNET=""
-if [ -x "$HOME/.dotnet-arm64/dotnet" ]; then
-    DOTNET="$HOME/.dotnet-arm64/dotnet"
-elif command -v dotnet &>/dev/null; then
-    DOTNET="dotnet"
-fi
+for candidate in "$USER_DOTNET" "${DOTNET_ROOT:+$DOTNET_ROOT/dotnet}" \
+                 "$HOME/.dotnet/dotnet" "$HOME/.dotnet-arm64/dotnet" "$(command -v dotnet 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version &>/dev/null; then
+        DOTNET="$candidate"
+        break
+    fi
+done
 
 if [ -z "$DOTNET" ]; then
     echo ""

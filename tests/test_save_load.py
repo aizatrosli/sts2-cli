@@ -1,8 +1,11 @@
 """Regression tests for native save/load behavior."""
 
+import pytest
+
 from conftest import Game
 
 
+@pytest.mark.engine
 def test_load_map_save_does_not_retrigger_neow(tmp_path):
     save_path = tmp_path / "map_select.save"
 
@@ -26,6 +29,7 @@ def test_load_map_save_does_not_retrigger_neow(tmp_path):
         game.close()
 
 
+@pytest.mark.engine
 def test_load_pre_neow_save_preserves_neow_choice(tmp_path):
     save_path = tmp_path / "pre_neow.save"
 

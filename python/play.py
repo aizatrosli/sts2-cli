@@ -125,7 +125,6 @@ def _build():
 
 def ensure_setup():
     """Check that everything is ready to run. Auto-setup if needed."""
-    issues = []
 
     # Check .NET SDK
     if not DOTNET:
@@ -304,7 +303,12 @@ def short_n(obj):
     return str(obj) if obj is not None else "?"
 
 def desc(obj):
-    """Extract description, strip BBCode tags, clean SmartFormat vars."""
+    """Engine text is already rendered (variables filled in, BBCode stripped, [E] for energy)."""
+    return obj.strip() if isinstance(obj, str) else ""
+
+
+def raw_template_text(obj):
+    """Best-effort display of a raw loc-table template (only for text the engine did not render)."""
     if obj and isinstance(obj, str):
         import re
         text = obj
@@ -379,42 +383,9 @@ CARD_KW_PREFIX_ORDER = ("Innate", "Ethereal", "Retain", "Sly")
 
 # ─── Game display ───
 
-def resolve_template(text, vars_dict):
-    """Replace [VarName] in text with actual values from vars dict.
-    Matches case-insensitively against the vars dict keys.
-    Also handles special vars like energyPrefix."""
-    if not text:
-        return text
-    import re
-    # Build case-insensitive lookup from stats + special vars
-    lower_vars = {}
-    if vars_dict:
-        lower_vars = {k.lower(): v for k, v in vars_dict.items()}
-    def replacer(m):
-        key = m.group(1)
-        # Handle plural: [Cards:card|cards]
-        if ':' in key and '|' in key:
-            var_name, plural_spec = key.split(':', 1)
-            val = lower_vars.get(var_name.lower())
-            if val is not None:
-                forms = plural_spec.split('|')
-                return forms[0] if int(val) == 1 else (forms[1] if len(forms) > 1 else forms[0])
-            return f"[{key}]"
-        kl = key.lower()
-        val = lower_vars.get(kl)
-        if val is not None:
-            return str(val)
-        # Special vars
-        if kl == "energyprefix":
-            return ""  # prefix only, unit already added by energyIcons handler in desc()
-        return f"[{key}]"
-    return re.sub(r'\[([^\]]+)\]', replacer, text)
-
 def card_desc(card):
     """Get resolved card description using stats as template vars."""
-    d = desc(card.get("description", {}))
-    stats = card.get("stats") or {}
-    return resolve_template(d, stats)  # always resolve (handles energyPrefix etc.)
+    return desc(card.get("description"))
 
 
 def _card_kw_label(kw):
@@ -532,10 +503,7 @@ def relic_str(r):
     """Format a relic with name and resolved description."""
     if isinstance(r, dict) and "name" in r:
         name = n(r["name"])
-        d = desc(r.get("description", {}))
-        # Resolve template vars with actual values
-        vars_dict = r.get("vars") or {}
-        d = resolve_template(d, vars_dict)
+        d = desc(r.get("description"))
         return f"{name}" + (f": {c(d, 'dim')}" if d else "")
     return n(r)
 
@@ -543,9 +511,7 @@ def potion_str(p):
     """Format a potion with name and resolved description."""
     if isinstance(p, dict) and "name" in p:
         name = n(p["name"])
-        d = desc(p.get("description", {}))
-        vars_dict = p.get("vars") or {}
-        d = resolve_template(d, vars_dict) if vars_dict else d
+        d = desc(p.get("description"))
         idx = p.get("index", "?")
         return f"[{idx}] {name}" + (f": {c(d, 'dim')}" if d else "")
     return n(p)
@@ -596,8 +562,6 @@ def show_combat(state):
             amt = pw.get("amount", 0)
             amt_str = f" {amt}" if amt and amt != 0 else ""
             pw_desc = desc(pw.get("description", ""))
-            if pw_desc and amt:
-                pw_desc = resolve_template(pw_desc, {"Amount": abs(amt) if isinstance(amt, (int, float)) else amt})
             is_debuff = isinstance(amt, (int, float)) and amt < 0
             color = "red" if is_debuff else "green"
             label = "Debuff" if is_debuff else "Buff"
@@ -852,7 +816,7 @@ def show_shop(state):
         cc = card.get("card_cost", "?")
         _pre, suf = split_card_keywords(card.get("keywords"))
         suf_part = format_card_suffix_keywords(suf)
-        print(f"  [{card['index']}] {n(card['name'])} ({cc}) {c(card.get('type','?'), 'dim')}{suf_part} — {affordable}g{sale}")
+        print(f"  [c{card['index']}] {n(card['name'])} ({cc}) {c(card.get('type','?'), 'dim')}{suf_part} — {affordable}g{sale}")
         print_card_detail_extension(card, indent="      ")
 
     print(f"\n  {c('Relics:', 'bold')}")
@@ -937,7 +901,7 @@ def loc_resolve(key):
             desc_en = cache.get(f"relics:{p}.description", "")
             if relic_en:
                 name = relic_en
-                d = desc(desc_en)
+                d = raw_template_text(desc_en)
                 return f"{name}" + (f" — {c(d, 'dim')}" if d else "")
             return p.replace('_', ' ').title()
     return key
@@ -955,7 +919,8 @@ def show_event(state):
         print(f"  {c(act, 'dim')} Floor {floor}")
     event_label = "Event"
     print(f"  {c(f'{event_label}: {event_display}', 'bold')}")
-    # event_desc is usually a raw loc key — skip it (event name already in title)
+    if desc(event_desc):
+        print(f"  {c(desc(event_desc), 'dim')}")
     show_player(state.get("player", {}))
     print()
     for opt in state.get("options", []):
@@ -966,11 +931,7 @@ def show_event(state):
         title = loc_resolve(raw_title) if '.' in str(raw_title) or str(raw_title).isupper() else raw_title
         # Show option description with resolved template vars
         raw_desc = opt.get("description")
-        opt_desc = desc(raw_desc) if raw_desc else ""
-        # Resolve template vars like [MaxHp], [Gold], {Cards}
-        opt_vars = opt.get("vars") or {}
-        if opt_vars and opt_desc:
-            opt_desc = resolve_template(opt_desc, opt_vars)
+        opt_desc = desc(raw_desc)
         desc_str = f" — {c(opt_desc, 'dim')}" if opt_desc else ""
         print(f"  {mark} [{opt['index']}] {title}{desc_str}")
 
@@ -1066,7 +1027,6 @@ def _render_map(map_data, choice_set=None, choice_indices=None):
                 continue
             icon = ICONS.get(nd.get("type", "?"), "·")
             is_cur = (cur and cur["col"] == col and cur["row"] == rn)
-            is_choice = (col, rn) in choice_set
             visited = nd.get("visited", False)
 
             center = col * W + W // 2
@@ -1196,8 +1156,8 @@ def get_input(prompt, valid_options=None, state=None, multi_select=False, multi_
     Reward:  card index / {c('s', 'yellow')} skip
     Multi:   when prompted for N–M cards (or 0–M optional), comma-separate indices, e.g. {c('0,1,2', 'yellow')}
     Rest:    option index
-    Event:   option index / {c('leave', 'yellow')} leave
-    Shop:    {c('c0', 'yellow')} card / {c('r0', 'yellow')} relic / {c('p0', 'yellow')} potion / {c('rm', 'yellow')} remove / {c('leave', 'yellow')} leave
+    Event:   option index / {c('leave', 'yellow')} to go back to the map
+    Shop:    {c('c0', 'yellow')} card / {c('r0', 'yellow')} relic / {c('p0', 'yellow')} potion / {c('rm', 'yellow')} remove a card / {c('leave', 'yellow')} to exit
 """)
             continue
         if raw == "deck" and state:
@@ -1450,11 +1410,12 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
             if state and state.get("type") == "error":
                 print(f"  {c('Error:', 'red')} {state.get('message', '?')}")
                 return
-            p = state.get("player", {}) if state else {}
-            char_name = p.get("name", {})
-            if isinstance(char_name, dict):
-                character = char_name.get("en", character)
-            print(f"  {c('Save loaded!', 'green')}")
+            ctx = state.get("context") or {}
+            if ctx.get("character"):
+                character = ctx["character"].capitalize()
+            actual_seed = ctx.get("seed") or actual_seed
+            logger.rename(character, actual_seed)
+            print(f"  {c('Save loaded!', 'green')} {character}, seed {actual_seed}")
         else:
             state = send({
                 "cmd": "start_run",
@@ -1610,17 +1571,12 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
                         continue
 
                 if choice == "e":
-                    # Track hand before end_turn to detect added status cards
-                    old_hand_names = [n(cd.get("name","?")) for cd in hand]
-                    old_discard = state.get("discard_pile_count", 0)
                     state = send({"cmd": "action", "action": "end_turn"})
-                    # Show status cards added (new cards in hand/discard that weren't there)
+                    # Show status cards the enemy turn put in hand
                     if state and state.get("decision") == "combat_play":
                         new_hand = state.get("hand", [])
-                        new_discard = state.get("discard_pile_count", 0)
                         status_cards = [n(cd.get("name","?")) for cd in new_hand if cd.get("type") in ("Status", "Curse")]
                         if status_cards:
-                            from collections import Counter
                             sc_str = ", ".join(f"{c(name, 'red')}" for name in status_cards)
                             print(f"  ⚠ Status cards in hand: {sc_str}")
                 elif choice.startswith("p") and choice[1:].isdigit():
@@ -1800,26 +1756,28 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
             elif dec in ("shop", "fake_merchant"):
                 show_shop(state)
 
+                # What the shop offers right now: c<i>/<i> card, r<i> relic, p<i> potion, rm removal.
+                offers = {"leave": {"action": "leave_room"}}
+                for a in state.get("legal_actions") or []:
+                    args = a.get("args") or {}
+                    if a["action"] == "buy_card":
+                        offers[f"c{args['card_index']}"] = offers[str(args["card_index"])] = a
+                    elif a["action"] == "buy_relic":
+                        offers[f"r{args['relic_index']}"] = a
+                    elif a["action"] == "buy_potion":
+                        offers[f"p{args['potion_index']}"] = a
+                    elif a["action"] == "remove_card":
+                        offers["rm"] = a
+
                 if auto:
                     choice = "leave"
                 elif dec == "fake_merchant":
-                    choice = get_input("Buy [r0] or (leave)", state=state)
+                    choice = get_input("Buy [r0] or (leave)", valid_options=set(offers), state=state)
                 else:
-                    choice = get_input("Buy [index/r0/p0/rm] or (leave)", state=state)
+                    choice = get_input("Buy [c0/r0/p0/rm] or (leave)", valid_options=set(offers), state=state)
 
-                if choice == "leave":
-                    state = send({"cmd": "action", "action": "leave_room"})
-                elif choice == "rm":
-                    state = send({"cmd": "action", "action": "remove_card"})
-                elif choice.startswith("r"):
-                    state = send({"cmd": "action", "action": "buy_relic",
-                                 "args": {"relic_index": int(choice[1:])}})
-                elif choice.startswith("p"):
-                    state = send({"cmd": "action", "action": "buy_potion",
-                                 "args": {"potion_index": int(choice[1:])}})
-                else:
-                    state = send({"cmd": "action", "action": "buy_card",
-                                 "args": {"card_index": int(choice)}})
+                pick = offers[choice]
+                state = send({"cmd": "action", "action": pick["action"], **({"args": pick["args"]} if pick.get("args") else {})})
 
             elif dec == "rest_site":
                 show_rest_site(state)

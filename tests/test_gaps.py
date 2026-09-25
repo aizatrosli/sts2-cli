@@ -86,7 +86,7 @@ class TestValidation:
         assert game.send({"cmd": "get_state"})["decision"] == "map_select"
 
     def test_map_select_rejected_in_combat(self, game):
-        state = first_combat(game, ["STRIKE_SILENT"] * 5 + ["DEFEND_SILENT"] * 5)
+        first_combat(game, ["STRIKE_SILENT"] * 5 + ["DEFEND_SILENT"] * 5)
         rows = game.get_map()["rows"]
         node = next(n for row in rows for n in row if n["row"] == 3)
         resp = game.act("select_map_node", col=node["col"], row=node["row"])
@@ -288,6 +288,7 @@ class TestRobustness:
 
 
 class TestFuzz:
+    @pytest.mark.engine
     @pytest.mark.parametrize("flow", ["manual", "auto"])
     def test_short_fuzz_finds_no_violations(self, flow):
         import argparse
