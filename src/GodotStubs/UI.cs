@@ -41,6 +41,12 @@ public class Control : CanvasItem
         All = 2,
         Accessibility = 3,
     }
+    public enum FocusBehaviorRecursiveEnum : long
+    {
+        Inherited = 0,
+        Disabled = 1,
+        Enabled = 2,
+    }
     public enum MouseFilterEnum : long
     {
         Stop = 0,
@@ -68,7 +74,10 @@ public class Control : CanvasItem
     }
 
     public new class MethodName : Node.MethodName { }
-    public new class PropertyName : Node.PropertyName { }
+    public new class PropertyName : Node.PropertyName
+    {
+        public static readonly StringName Size = "size";
+    }
     public new class SignalName : CanvasItem.SignalName
     {
         public static readonly StringName FocusEntered = "FocusEntered";
@@ -83,6 +92,7 @@ public class Control : CanvasItem
     public Vector2 Size { get; set; }
     public Vector2 CustomMinimumSize { get; set; }
     public float Rotation { get; set; }
+    public float RotationDegrees { get => Mathf.RadToDeg(Rotation); set => Rotation = Mathf.DegToRad(value); }
     public Vector2 Scale { get; set; } = Vector2.One;
     public Vector2 PivotOffset { get; set; }
     public FocusModeEnum FocusMode { get; set; }
@@ -102,8 +112,12 @@ public class Control : CanvasItem
     public NodePath FocusNeighborRight { get; set; } = new();
     public NodePath FocusNeighborTop { get; set; } = new();
     public void SetFocusMode(FocusModeEnum mode) => FocusMode = mode;
+    public FocusBehaviorRecursiveEnum FocusBehaviorRecursive { get; set; }
+    public void SetFocusBehaviorRecursive(FocusBehaviorRecursiveEnum focusBehaviorRecursive) => FocusBehaviorRecursive = focusBehaviorRecursive;
     public void SetAnchorsPreset(LayoutPreset preset, bool keepOffsets = false) { }
+    public void SetGlobalPosition(Vector2 position, bool keepOffsets = false) => GlobalPosition = position;
     public void AddThemeFontOverride(StringName name, Font font) { }
+    public void AddThemeColorOverride(StringName name, Color color) { }
     public override Transform2D GetGlobalTransform() => new(Rotation, Scale, 0, GlobalPosition);
 }
 
@@ -122,6 +136,8 @@ public class Node2D : CanvasItem
     public Transform2D GlobalTransform { get; set; } = Transform2D.Identity;
     public Transform2D Transform { get; set; } = Transform2D.Identity;
     public override Transform2D GetGlobalTransform() => GlobalTransform;
+    // Godot: (to_local(point) * get_scale()).angle()
+    public float GetAngleTo(Vector2 point) => (GetGlobalTransform().AffineInverse() * point * Scale).Angle();
 }
 
 // Resource
@@ -151,7 +167,11 @@ public class PackedScene : Resource
 }
 
 // Texture types
-public class Texture2D : Resource { }
+// No image data headless: sizes are those of an empty texture.
+public class Texture2D : Resource
+{
+    public int GetWidth() => 0;
+}
 public class CompressedTexture2D : Texture2D { }
 public class AtlasTexture : Texture2D
 {
@@ -160,6 +180,7 @@ public class AtlasTexture : Texture2D
     public Texture2D? Atlas { get; set; }
 }
 public class ImageTexture : Texture2D { }
+public class CurveXyzTexture : Texture2D { }
 
 // Material types
 public class Material : Resource { }
@@ -239,6 +260,7 @@ public class Tween : GodotObject
 public class PropertyTweener
 {
     public PropertyTweener From(Variant value) => this;
+    public PropertyTweener FromCurrent() => this;
     public PropertyTweener SetEase(Tween.EaseType ease) => this;
     public PropertyTweener SetTrans(Tween.TransitionType trans) => this;
     public PropertyTweener SetDelay(double delay) => this;
@@ -301,7 +323,22 @@ public class MarginContainer : Container { }
 public class CenterContainer : Container { }
 public class ScrollContainer : Container { }
 public class SubViewportContainer : Container { }
-public class SubViewport : Viewport { }
+public class SubViewport : Viewport
+{
+    public enum UpdateMode : long
+    {
+        Disabled = 0,
+        Once = 1,
+        WhenVisible = 2,
+        WhenParentVisible = 3,
+        Always = 4,
+    }
+
+    // Godot defaults: 512x512, no 2D override, render when visible.
+    public Vector2I Size { get; set; } = new(512, 512);
+    public Vector2I Size2DOverride { get; set; }
+    public UpdateMode RenderTargetUpdateMode { get; set; } = UpdateMode.WhenVisible;
+}
 
 public class Label : Control
 {

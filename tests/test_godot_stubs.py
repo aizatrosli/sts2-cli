@@ -5,6 +5,7 @@ calls it (typically "Combat #N turn loop died"). The optional checks compare aga
 the real GodotSharp.dll shipped with the game: set STS2_GODOTSHARP_DLL, or STS2_GAME_DIR
 to the game data directory that contains it.
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -61,3 +62,63 @@ def test_testmode_branches_reviewed():
     """Every TestMode read in gameplay code is on the reviewed allowlist (new ones need review)."""
     result = _run_tool("TestModeAudit", "--fail")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+FIXTURE = ROOT / "tests" / "fixtures" / "godot_audit"
+
+
+def _build(project):
+    result = subprocess.run([DOTNET, "build", str(project)], cwd=ROOT, capture_output=True, text=True, timeout=900)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _audit_fixture(tmp_path, *args):
+    """Run GodotStubAudit on the fixture game against the fixture stub; return (exit code, report)."""
+    _build(FIXTURE / "Game" / "FixtureGame.csproj")
+    _build(FIXTURE / "Stub" / "GodotSharp.Stub.csproj")
+    out = tmp_path / "audit.json"
+    result = _run_tool(
+        "GodotStubAudit",
+        "--sts2", str(FIXTURE / "Game" / "bin" / "Debug" / "net9.0" / "FixtureGame.dll"),
+        "--stub", str(FIXTURE / "Stub" / "bin" / "Debug" / "net9.0" / "GodotSharp.dll"),
+        "--json", str(out), *args,
+    )
+    assert result.returncode in (0, 1), result.stdout + result.stderr
+    return result.returncode, json.loads(out.read_text())
+
+
+def _missing_tiers(report):
+    tiers = {m["name"]: m["tier"] for m in report["members"] if not m["present"]}
+    tiers.update({t["name"]: t["tier"] for t in report["types"] if not t["present"]})
+    return tiers
+
+
+def test_audit_reachable_ui_tier(tmp_path):
+    """A UI-only reference is reachable-ui when gameplay calls its method within 2 edges."""
+    code, report = _audit_fixture(tmp_path, "--fail")
+    assert code == 1  # gameplay and reachable-ui gaps fail the audit
+    assert _missing_tiers(report) == {
+        "InGameplay": "gameplay",
+        "OneHop": "reachable-ui",                # gameplay → UI
+        "TwoHop": "reachable-ui",                # gameplay → UI → UI
+        "ThreeHop": "ui",                        # 3 edges: beyond the default depth
+        "ViaOverride": "reachable-ui",           # virtual call lands in an override
+        "ViaOverrideOfOverride": "reachable-ui",
+        "ViaInterface": "reachable-ui",          # interface call, implicit implementation
+        "ViaExplicitInterface": "reachable-ui",  # interface call, explicit implementation
+        "InAsync": "reachable-ui",               # body in the state machine's MoveNext
+        "InLambda": "reachable-ui",              # lambda created by a reached UI method
+        "InGeneric": "reachable-ui",             # method on a generic type instantiation
+        "InCctor": "reachable-ui",               # static constructor of a reached type
+        "Godot.MissingType": "reachable-ui",     # field type of a reached UI type
+        "Orphan": "ui",                          # UI code gameplay never calls
+        "ToolOnly": "tooling",
+    }
+    two_hop = next(m for m in report["members"] if m["name"] == "TwoHop")
+    assert two_hop["path"] == ["Models.Card::OnPlay", "Nodes.NChain::A", "Nodes.NChain::B"]
+
+
+def test_audit_depth_option(tmp_path):
+    _, report = _audit_fixture(tmp_path, "--depth", "3")
+    assert report["depth"] == 3
+    assert _missing_tiers(report)["ThreeHop"] == "reachable-ui"

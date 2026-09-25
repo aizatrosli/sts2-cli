@@ -337,6 +337,7 @@ public class SceneTree : MainLoop
     }
 
     public Window Root { get; } = new Window();
+    public Tween CreateTween() => new Tween();
 }
 
 public class SceneTreeTimer : GodotObject
@@ -463,5 +464,8 @@ public class Viewport : Node
     }
 
     public Vector2 GetMousePosition() => Vector2.Zero;
+    // Nothing holds focus headless (Control.HasFocus is always false).
+    public Control GuiGetFocusOwner() => null!;
+    public void GuiReleaseFocus() { }
     public Rect2 GetVisibleRect() => new Rect2(0, 0, 1920, 1080);
 }
