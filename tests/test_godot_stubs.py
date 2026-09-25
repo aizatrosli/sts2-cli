@@ -7,15 +7,14 @@ to the game data directory that contains it.
 """
 import os
 from pathlib import Path
-import shutil
 import subprocess
 
 import pytest
 
+from conftest import find_dotnet
+
 ROOT = Path(__file__).resolve().parents[1]
-DOTNET = os.path.expanduser("~/.dotnet-arm64/dotnet")
-if not os.path.isfile(DOTNET):
-    DOTNET = shutil.which("dotnet") or DOTNET
+DOTNET = find_dotnet()
 STS2_DLL = ROOT / "lib" / "sts2.dll"
 STUB_DLL = ROOT / "src" / "Sts2Headless" / "bin" / "Debug" / "net9.0" / "GodotSharp.dll"
 

@@ -1,41 +1,87 @@
 """Pytest fixtures: Game process wrapper for unit tests."""
 
+import collections
+import glob
 import json
 import os
+import queue
 import shutil
 import subprocess
+import threading
 import pytest
 
-DOTNET = os.path.expanduser("~/.dotnet-arm64/dotnet")
-if not os.path.isfile(DOTNET):
-    DOTNET = shutil.which("dotnet") or DOTNET
-PROJECT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "src", "Sts2Headless", "Sts2Headless.csproj")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT = os.path.join(ROOT, "src", "Sts2Headless", "Sts2Headless.csproj")
+READ_TIMEOUT = float(os.environ.get("STS2_TEST_READ_TIMEOUT", "120"))
+
+
+def find_dotnet():
+    """dotnet executable: $DOTNET, $DOTNET_ROOT, ~/.dotnet, ~/.dotnet-arm64, then PATH."""
+    candidates = [os.environ.get("DOTNET")]
+    if os.environ.get("DOTNET_ROOT"):
+        candidates.append(os.path.join(os.environ["DOTNET_ROOT"], "dotnet"))
+    candidates += [os.path.expanduser("~/.dotnet/dotnet"), os.path.expanduser("~/.dotnet-arm64/dotnet"),
+                   shutil.which("dotnet")]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return "dotnet"
+
+
+DOTNET = find_dotnet()
+
+
+def engine_command():
+    """Run the built dll directly (much faster than `dotnet run`); fall back to the project."""
+    dlls = sorted(glob.glob(os.path.join(ROOT, "src", "Sts2Headless", "bin", "*", "*", "Sts2Headless.dll")),
+                  key=os.path.getmtime, reverse=True)
+    if dlls:
+        return [DOTNET, dlls[0]]
+    return [DOTNET, "run", "--no-build", "--project", PROJECT]
 
 
 class Game:
     """Wraps the headless C# process for testing."""
 
-    def __init__(self):
+    def __init__(self, timeout=READ_TIMEOUT):
         env = os.environ.copy()
         # Match the interactive launcher's default: resolve dependencies from lib,
         # never silently borrow missing assemblies from the Steam installation.
-        env["STS2_GAME_DIR"] = os.path.join(os.path.dirname(os.path.dirname(PROJECT)), "..", "lib")
+        env["STS2_GAME_DIR"] = os.path.join(ROOT, "lib")
+        self.timeout = timeout
         self.proc = subprocess.Popen(
-            [DOTNET, "run", "--no-build", "--project", PROJECT],
+            engine_command(), cwd=ROOT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
         )
+        # Drain both pipes on threads: an unread stderr pipe fills up and blocks the engine.
+        self.stderr_lines = collections.deque(maxlen=2000)
+        self._lines = queue.Queue()
+        threading.Thread(target=self._pump, args=(self.proc.stdout, self._lines.put), daemon=True).start()
+        threading.Thread(target=self._pump, args=(self.proc.stderr, self.stderr_lines.append), daemon=True).start()
         ready = self._read()
         assert ready.get("type") == "ready", f"Expected ready, got: {ready}"
 
+    @staticmethod
+    def _pump(stream, sink):
+        for line in stream:
+            sink(line.rstrip("\n"))
+        sink(None)
+
     def _read(self):
         while True:
-            line = self.proc.stdout.readline().strip()
-            if not line:
+            try:
+                line = self._lines.get(timeout=self.timeout)
+            except queue.Empty:
+                raise TimeoutError(f"no response from game process within {self.timeout}s") from None
+            if line is None:
                 raise RuntimeError("EOF from game process")
+            line = line.strip()
             if line.startswith("{"):
                 return json.loads(line)
+
+    def stderr_text(self):
+        return "\n".join(l for l in self.stderr_lines if l is not None)
 
     def send(self, cmd):
         self.proc.stdin.write(json.dumps(cmd) + "\n")
@@ -137,3 +183,7 @@ def game():
     g = Game()
     yield g
     g.close()
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: long-running end-to-end test")

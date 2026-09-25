@@ -1412,7 +1412,8 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
     proc = subprocess.Popen(
         [DOTNET, "run", "--no-build", "--project", PROJECT],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, bufsize=1,
+        # Engine logs are not shown; an unread PIPE would fill up and hang the engine.
+        stderr=subprocess.DEVNULL, text=True, bufsize=1,
     )
 
     def read():
