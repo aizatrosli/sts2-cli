@@ -68,7 +68,10 @@ public class Control : CanvasItem
     }
 
     public new class MethodName : Node.MethodName { }
-    public new class PropertyName : Node.PropertyName { }
+    public new class PropertyName : Node.PropertyName
+    {
+        public static readonly StringName Size = "size";
+    }
     public new class SignalName : CanvasItem.SignalName
     {
         public static readonly StringName FocusEntered = "FocusEntered";
@@ -83,6 +86,7 @@ public class Control : CanvasItem
     public Vector2 Size { get; set; }
     public Vector2 CustomMinimumSize { get; set; }
     public float Rotation { get; set; }
+    public float RotationDegrees { get => Mathf.RadToDeg(Rotation); set => Rotation = Mathf.DegToRad(value); }
     public Vector2 Scale { get; set; } = Vector2.One;
     public Vector2 PivotOffset { get; set; }
     public FocusModeEnum FocusMode { get; set; }
@@ -103,7 +107,9 @@ public class Control : CanvasItem
     public NodePath FocusNeighborTop { get; set; } = new();
     public void SetFocusMode(FocusModeEnum mode) => FocusMode = mode;
     public void SetAnchorsPreset(LayoutPreset preset, bool keepOffsets = false) { }
+    public void SetGlobalPosition(Vector2 position, bool keepOffsets = false) => GlobalPosition = position;
     public void AddThemeFontOverride(StringName name, Font font) { }
+    public void AddThemeColorOverride(StringName name, Color color) { }
     public override Transform2D GetGlobalTransform() => new(Rotation, Scale, 0, GlobalPosition);
 }
 
@@ -122,6 +128,8 @@ public class Node2D : CanvasItem
     public Transform2D GlobalTransform { get; set; } = Transform2D.Identity;
     public Transform2D Transform { get; set; } = Transform2D.Identity;
     public override Transform2D GetGlobalTransform() => GlobalTransform;
+    // Godot: (to_local(point) * get_scale()).angle()
+    public float GetAngleTo(Vector2 point) => (GetGlobalTransform().AffineInverse() * point * Scale).Angle();
 }
 
 // Resource
@@ -151,7 +159,11 @@ public class PackedScene : Resource
 }
 
 // Texture types
-public class Texture2D : Resource { }
+// No image data headless: sizes are those of an empty texture.
+public class Texture2D : Resource
+{
+    public int GetWidth() => 0;
+}
 public class CompressedTexture2D : Texture2D { }
 public class AtlasTexture : Texture2D
 {
@@ -239,6 +251,7 @@ public class Tween : GodotObject
 public class PropertyTweener
 {
     public PropertyTweener From(Variant value) => this;
+    public PropertyTweener FromCurrent() => this;
     public PropertyTweener SetEase(Tween.EaseType ease) => this;
     public PropertyTweener SetTrans(Tween.TransitionType trans) => this;
     public PropertyTweener SetDelay(double delay) => this;

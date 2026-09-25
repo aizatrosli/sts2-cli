@@ -37,11 +37,17 @@ public struct Vector2 : IEquatable<Vector2>
     public readonly float AngleTo(Vector2 to) => MathF.Atan2(Cross(to), Dot(to));
     public readonly float AngleToPoint(Vector2 to) => MathF.Atan2(to.Y - Y, to.X - X);
     public readonly float Aspect() => X / Y;
+    public readonly Vector2 BezierInterpolate(Vector2 control1, Vector2 control2, Vector2 end, float t) => new(
+        Mathf.BezierInterpolate(X, control1.X, control2.X, end.X, t),
+        Mathf.BezierInterpolate(Y, control1.Y, control2.Y, end.Y, t));
     public readonly Vector2 Bounce(Vector2 normal) => -Reflect(normal);
     public readonly Vector2 Ceil() => new(MathF.Ceiling(X), MathF.Ceiling(Y));
     public readonly Vector2 Clamp(Vector2 min, Vector2 max) => new(Mathf.Clamp(X, min.X, max.X), Mathf.Clamp(Y, min.Y, max.Y));
     public readonly Vector2 Clamp(float min, float max) => new(Mathf.Clamp(X, min, max), Mathf.Clamp(Y, min, max));
     public readonly float Cross(Vector2 with) => X * with.Y - Y * with.X;
+    public readonly Vector2 CubicInterpolate(Vector2 b, Vector2 preA, Vector2 postB, float weight) => new(
+        Mathf.CubicInterpolate(X, b.X, preA.X, postB.X, weight),
+        Mathf.CubicInterpolate(Y, b.Y, preA.Y, postB.Y, weight));
     public readonly Vector2 DirectionTo(Vector2 to) => new Vector2(to.X - X, to.Y - Y).Normalized();
     public readonly float DistanceSquaredTo(Vector2 to) => (X - to.X) * (X - to.X) + (Y - to.Y) * (Y - to.Y);
     public readonly float DistanceTo(Vector2 to) => MathF.Sqrt(DistanceSquaredTo(to));
@@ -999,6 +1005,25 @@ public static class Mathf
     public static double DegToRad(double deg) => deg * DegToRadConstD;
     public static float RadToDeg(float rad) => rad * RadToDegConstF;
     public static double RadToDeg(double rad) => rad * RadToDegConstD;
+
+    public static float BezierInterpolate(float start, float control1, float control2, float end, float t)
+    {
+        float omt = 1.0f - t, omt2 = omt * omt, omt3 = omt2 * omt;
+        float t2 = t * t, t3 = t2 * t;
+        return start * omt3 + control1 * omt2 * t * 3.0f + control2 * omt * t2 * 3.0f + end * t3;
+    }
+    public static double BezierInterpolate(double start, double control1, double control2, double end, double t)
+    {
+        double omt = 1.0 - t, omt2 = omt * omt, omt3 = omt2 * omt;
+        double t2 = t * t, t3 = t2 * t;
+        return start * omt3 + control1 * omt2 * t * 3.0 + control2 * omt * t2 * 3.0 + end * t3;
+    }
+    public static float CubicInterpolate(float from, float to, float pre, float post, float weight) =>
+        0.5f * ((from * 2.0f) + (-pre + to) * weight + (2.0f * pre - 5.0f * from + 4.0f * to - post) * (weight * weight)
+                + (-pre + 3.0f * from - 3.0f * to + post) * (weight * weight * weight));
+    public static double CubicInterpolate(double from, double to, double pre, double post, double weight) =>
+        0.5 * ((from * 2.0) + (-pre + to) * weight + (2.0 * pre - 5.0 * from + 4.0 * to - post) * (weight * weight)
+               + (-pre + 3.0 * from - 3.0 * to + post) * (weight * weight * weight));
 
     public static float Lerp(float from, float to, float weight) => from + (to - from) * weight;
     public static double Lerp(double from, double to, double weight) => from + (to - from) * weight;

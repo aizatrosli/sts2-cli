@@ -463,5 +463,7 @@ public class Viewport : Node
     }
 
     public Vector2 GetMousePosition() => Vector2.Zero;
+    // Nothing holds focus headless (Control.HasFocus is always false).
+    public Control GuiGetFocusOwner() => null!;
     public Rect2 GetVisibleRect() => new Rect2(0, 0, 1920, 1080);
 }
