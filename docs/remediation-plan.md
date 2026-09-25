@@ -76,8 +76,8 @@ Design:
     substituting or no-oping.
 - `start_run` / `load_save`: validate character, ascension (0–10), seed type, act1, flow and
   save JSON *before* `CleanUp()`, so a rejected command keeps the current run.
-- Legacy escape hatch: `start_run {"validate": false}` restores the old permissive behavior
-  for existing scripted clients. Default on.
+- Always on, no opt-out. Repo clients that send unlisted actions (`play.py`,
+  `play_full_run.py`, `agent/`) are fixed in this phase to send only listed actions.
 
 Tests: the Phase 0 exploit tests flip to passing; the short fuzzer asserts zero accepted
 unlisted actions and zero state change on rejected ones.
@@ -129,6 +129,8 @@ Each item is small; land them as separate commits inside the phase.
 9. **Localization patches** — `LocTable.GetRawText` returns the key only when the entry is
    missing; drop the `HasEntry`/`IsLocalKey`/`LocString.Exists` overrides now that the real
    tables load (affects Ancient/Architect dialogue selection RNG).
+10. **Seeds** — canonicalize with `SeedHelper.CanonicalizeSeed` as the lobby does, and echo
+    the canonical seed; regenerate seed baselines.
 
 ## Phase 3 — robustness
 
@@ -250,11 +252,11 @@ where a field is renamed.
 
 ## Decisions needed before the affected phase
 
-| Decision | Phase | Recommendation |
+| Decision | Phase | Choice |
 |---|---|---|
-| Validation gate on by default (breaks clients that send unlisted actions) | 1 | On, with `validate: false` opt-out |
-| Cancel on cancelable selections reuses `skip_select` or adds `cancel_select` | 2 | Reuse `skip_select` (no new action) |
-| Canonicalize seeds like the lobby (`SeedHelper.CanonicalizeSeed`) so seeds match the real game; changes every existing seed's run | 2 | Yes, with a `raw_seed` opt-out |
+| Validation gate on by default (breaks clients that send unlisted actions) | 1 | **Decided: always on, no opt-out** |
+| Canonicalize seeds like the lobby (`SeedHelper.CanonicalizeSeed`) so seeds match the real game; changes every existing seed's run | 2 | **Decided: yes** (Phase 2, item 10) |
+| Cancel on cancelable selections reuses `skip_select` or adds `cancel_select` | 2 | Recommendation: reuse `skip_select` (no new action) |
 | Breaking schema changes (renames, `null` → `[]`) | 5 | Add fields now, rename behind `schema_version` 2 |
 | Sequential card selection for RL (pick one, then confirm) vs index-set template | 6 | Keep template in protocol; offer sequential mode in the wrapper |
 
