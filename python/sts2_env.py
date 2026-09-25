@@ -39,15 +39,7 @@ PROJECT = os.path.join(REPO_ROOT, "src", "Sts2Headless", "Sts2Headless.csproj")
 VALID_CHARACTERS = ["Ironclad", "Silent", "Defect", "Regent", "Necrobinder"]
 
 
-def _find_dotnet():
-    for p in [os.path.expanduser("~/.dotnet-arm64/dotnet"),
-              os.path.expanduser("~/.dotnet/dotnet"), "dotnet"]:
-        try:
-            if subprocess.run([p, "--version"], capture_output=True, timeout=5).returncode == 0:
-                return p
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    return "dotnet"
+from engine import engine_command  # noqa: E402  (python/engine.py)
 
 
 class Sts2Error(RuntimeError):
@@ -84,7 +76,7 @@ class Sts2Env:
         if self._proc is not None and self._proc.poll() is None:
             return
         self._proc = subprocess.Popen(
-            [_find_dotnet(), "run", "--no-build", "--project", PROJECT],
+            engine_command(), cwd=REPO_ROOT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=None if self.verbose else subprocess.DEVNULL,
             text=True, bufsize=1,

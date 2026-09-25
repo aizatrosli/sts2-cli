@@ -167,7 +167,10 @@ Each item is small; land them as separate commits inside the phase.
 
 ## Phase 4 — throughput
 
-Target: ≥ 250 steps/s single env (now ~85).
+Target: ≥ 250 steps/s single env (was ~72). **Result: ~245 steps/s** (tools/bench.py), every
+seeded trajectory byte-identical (tools/trajectory.py). What remains is the engine's own
+enemy-turn work (~3 ms per end_turn) and building the observation (~1.3 ms); Phase 5's lighter
+observations (deck only when it changes) are the next lever.
 
 - `SettleCombatActions` (`RunSimulator.cs:1583`): return as soon as the executor is idle
   and nothing is pending, instead of requiring 8 idle polls with `Sleep(2)`; wait on

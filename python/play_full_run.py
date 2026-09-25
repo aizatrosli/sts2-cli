@@ -26,17 +26,9 @@ from game_log import GameLogger
 
 VALID_CHARACTERS = ["Ironclad", "Silent", "Defect", "Regent", "Necrobinder"]
 
-def _find_dotnet():
-    for p in [os.path.expanduser("~/.dotnet-arm64/dotnet"),
-              os.path.expanduser("~/.dotnet/dotnet"), "dotnet"]:
-        try:
-            if subprocess.run([p, "--version"], capture_output=True, timeout=5).returncode == 0:
-                return p
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    return "dotnet"
+from engine import engine_command, find_dotnet  # noqa: E402  (python/engine.py)
 
-DOTNET = _find_dotnet()
+DOTNET = find_dotnet()
 PROJECT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "src", "Sts2Headless", "Sts2Headless.csproj")
 
@@ -46,7 +38,7 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
     rng = random.Random(seed)
     logger = GameLogger(character, seed, enabled=log)
     proc = subprocess.Popen(
-        [DOTNET, "run", "--no-build", "--project", PROJECT],
+        engine_command(DOTNET),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL if not verbose else None,

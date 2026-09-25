@@ -1,12 +1,11 @@
 """Pytest fixtures: Game process wrapper for unit tests."""
 
 import collections
-import glob
 import json
 import os
 import queue
-import shutil
 import subprocess
+import sys
 import threading
 import pytest
 
@@ -15,29 +14,10 @@ PROJECT = os.path.join(ROOT, "src", "Sts2Headless", "Sts2Headless.csproj")
 READ_TIMEOUT = float(os.environ.get("STS2_TEST_READ_TIMEOUT", "120"))
 
 
-def find_dotnet():
-    """dotnet executable: $DOTNET, $DOTNET_ROOT, ~/.dotnet, ~/.dotnet-arm64, then PATH."""
-    candidates = [os.environ.get("DOTNET")]
-    if os.environ.get("DOTNET_ROOT"):
-        candidates.append(os.path.join(os.environ["DOTNET_ROOT"], "dotnet"))
-    candidates += [os.path.expanduser("~/.dotnet/dotnet"), os.path.expanduser("~/.dotnet-arm64/dotnet"),
-                   shutil.which("dotnet")]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return "dotnet"
-
+sys.path.insert(0, os.path.join(ROOT, "python"))
+from engine import engine_command, find_dotnet  # noqa: E402  (python/engine.py; find_dotnet re-exported)
 
 DOTNET = find_dotnet()
-
-
-def engine_command():
-    """Run the built dll directly (much faster than `dotnet run`); fall back to the project."""
-    dlls = sorted(glob.glob(os.path.join(ROOT, "src", "Sts2Headless", "bin", "*", "*", "Sts2Headless.dll")),
-                  key=os.path.getmtime, reverse=True)
-    if dlls:
-        return [DOTNET, dlls[0]]
-    return [DOTNET, "run", "--no-build", "--project", PROJECT]
 
 
 class Game:
@@ -50,7 +30,7 @@ class Game:
         env["STS2_GAME_DIR"] = os.path.join(ROOT, "lib")
         self.timeout = timeout
         self.proc = subprocess.Popen(
-            engine_command(), cwd=ROOT,
+            engine_command(DOTNET), cwd=ROOT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
         )

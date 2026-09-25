@@ -292,3 +292,19 @@ class TestFuzz:
         whole_row = {(n["col"], n["row"]) for r in game.get_map()["rows"] for n in r if n["row"] == row}
         assert {(c["col"], c["row"]) for c in state["choices"]} == whole_row
         assert normal <= whole_row
+
+
+class TestAutoFlowSync:
+    def test_skip_select_waits_for_the_event(self, game):
+        """Auto flow: skipping Hefty Tablet's card choice must return the finished Neow, not its first page."""
+        state = game.start(character="Silent", seed="traj-silent", flow="auto")
+        tablet = next((o for o in state["options"] if o["title"] == "Hefty Tablet"), None)
+        if tablet is None:
+            pytest.skip("seed no longer offers Hefty Tablet")
+        state = game.act("choose_option", option_index=tablet["index"])
+        assert state["decision"] == "card_select" and state["min_select"] == 0
+        deck = state["player"]["deck_size"]
+        state = game.act("skip_select")
+        assert state["player"]["deck_size"] == deck + 1  # the Injury is already added
+        assert not (state["decision"] == "event_choice"
+                    and any(o["title"] == "Hefty Tablet" for o in state.get("options", [])))

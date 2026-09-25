@@ -23,23 +23,9 @@ LIB_DIR = os.path.join(ROOT, "lib")
 SAVE_DIR = os.path.join(ROOT, "saves")
 
 
-def _find_dotnet():
-    """Find .NET SDK binary."""
-    candidates = [
-        os.path.expanduser("~/.dotnet-arm64/dotnet"),
-        os.path.expanduser("~/.dotnet/dotnet"),
-        "dotnet",
-    ]
-    for p in candidates:
-        try:
-            r = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=5)
-            if r.returncode == 0:
-                return p
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    return None
+from engine import engine_command, find_dotnet  # noqa: E402  (python/engine.py)
 
-DOTNET = _find_dotnet()
+DOTNET = find_dotnet(fallback=None)
 
 
 def _is_wsl():
@@ -1410,7 +1396,7 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
     logger = GameLogger(character, actual_seed, enabled=log)
     action_log = []
     proc = subprocess.Popen(
-        [DOTNET, "run", "--no-build", "--project", PROJECT],
+        engine_command(DOTNET),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         # Engine logs are not shown; an unread PIPE would fill up and hang the engine.
         stderr=subprocess.DEVNULL, text=True, bufsize=1,

@@ -204,7 +204,7 @@ public partial class RunSimulator
         Log($"Card reward alternative: {alts[idx].OptionId}");
         _cardSelector.ResolveRewardAlternative(idx);
         if (_manualFlow) return ResumeBackgroundWork();
-        Thread.Sleep(50);
+        PollUntil(RewardConsumed, 1000);
         _syncCtx.Pump();
         WaitForActionExecutor();
         return DetectDecisionPoint();
@@ -718,17 +718,47 @@ public partial class RunSimulator
     }
 
     /// <summary>Pump until <paramref name="task"/> completes or the player is needed. Returns true if the player is needed.</summary>
+    /// <summary>
+    /// Pause between polls of engine state: yield for the first checks (work usually finishes
+    /// within microseconds), then sleep 1 ms. Replaces fixed 2–10 ms sleeps that set the latency
+    /// floor of most actions.
+    /// </summary>
+    private static void PollPause(int iteration)
+    {
+        if (iteration < 100) Thread.Yield(); else Thread.Sleep(1);
+    }
+
+    /// <summary>Pump until <paramref name="done"/> or the deadline. Returns whether it finished.</summary>
+    private bool PollUntil(Func<bool> done, int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; ; i++)
+        {
+            _syncCtx.Pump();
+            if (done()) return true;
+            if (sw.ElapsedMilliseconds >= timeoutMs) return false;
+            PollPause(i);
+        }
+    }
+
+    /// <summary>Executor idle, no queued actions, no queued continuations.</summary>
+    private bool EngineIdle()
+    {
+        var executor = RunManager.Instance.ActionExecutor;
+        return !executor.IsRunning && RunManager.Instance.ActionQueueSet.IsEmpty && _syncCtx.IsIdle;
+    }
+
     private bool WaitForTaskOrPending(Task? task, int timeoutMs = 5000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
+        for (int i = 0; sw.ElapsedMilliseconds < timeoutMs; i++)
         {
             _syncCtx.Pump();
             if (task != null && task.IsCompleted) break;
             if (HasPendingInteraction && (task == null || !ReferenceEquals(task, TopRewardsScreen?.ClaimTask))) break;
             if (HasPendingSelection) break;
             if (task == null && sw.ElapsedMilliseconds > 20) break;
-            Thread.Sleep(2);
+            PollPause(i);
         }
         if (task != null && !task.IsCompleted && !HasPendingInteraction)
             Log($"Timed out after {timeoutMs}ms waiting for background work");

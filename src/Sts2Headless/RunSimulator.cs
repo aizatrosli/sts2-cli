@@ -74,6 +74,9 @@ internal class InlineSynchronizationContext : SynchronizationContext
         d(state);
     }
 
+    /// <summary>Nothing running and nothing queued.</summary>
+    public bool IsIdle => !_executing && _queue.IsEmpty;
+
     public void Pump()
     {
         // Drain any remaining queued callbacks
@@ -177,6 +180,11 @@ public partial class RunSimulator
     private int _lastEventOptionCount;
     // Auto flow: the thread-pool task running the last chosen event option (see WaitForEventOption).
     private Task? _eventOptionTask;
+    private Task? _restOptionTask;
+    private Task? _shopRemovalTask;
+
+    /// <summary>The engine thread blocked on a card reward has taken the choice (or a new prompt opened).</summary>
+    private bool RewardConsumed() => _cardSelector.PendingRewardCards == null || HasPendingSelection;
 
     // Pending rewards for card selection (populated after combat, before proceeding)
     private List<Reward>? _pendingRewards;
@@ -1130,12 +1138,14 @@ public partial class RunSimulator
             _syncCtx.Pump();
 
             // Fallback: if turn didn't complete synchronously, keep pumping with SuppressYield on
-            // (up to ~2s; returns as soon as the next player turn starts).
-            for (int i = 0; i < 1000 && !NextTurnReached(); i++)
+            // (up to 2 s of wall clock; returns as soon as the next player turn starts). Yield
+            // for the first checks: the enemy turn usually finishes within microseconds.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; !NextTurnReached() && deadline.ElapsedMilliseconds < 2000; i++)
             {
                 _syncCtx.Pump();
                 if (_combatEnded.IsSet) break;
-                Thread.Sleep(2);
+                if (i < 200) Thread.Yield(); else Thread.Sleep(1);
             }
         }
         finally
@@ -1179,13 +1189,14 @@ public partial class RunSimulator
                     YieldPatches.SuppressYield = false;
                 }
 
-                for (int i = 0; i < 100; i++)
+                var poll = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
                 {
                     _syncCtx.Pump();
                     if (_turnStarted.IsSet || _combatEnded.IsSet) break;
                     if (!CombatManager.Instance.IsInProgress || player.Creature.IsDead) break;
                     if (IsPlayPhase()) break;
-                    Thread.Sleep(10);
+                    PollPause(i);
                 }
             }
             catch (Exception ex) { Log($"Cancel retry: {ex.Message}"); }
@@ -1282,7 +1293,7 @@ public partial class RunSimulator
             Log($"Resolving event card reward: index {idx}");
             _cardSelector.ResolveReward(idx);
             if (_manualFlow) return ResumeBackgroundWork();
-            Thread.Sleep(50);
+            PollUntil(RewardConsumed, 1000);
             _syncCtx.Pump();
             WaitForActionExecutor();
             WaitForEventOption();
@@ -1325,7 +1336,7 @@ public partial class RunSimulator
             Log("Skipping event card reward");
             _cardSelector.SkipReward();
             if (_manualFlow) return ResumeBackgroundWork();
-            Thread.Sleep(50);
+            PollUntil(RewardConsumed, 1000);
             _syncCtx.Pump();
             WaitForActionExecutor();
             WaitForEventOption();
@@ -1395,13 +1406,14 @@ public partial class RunSimulator
             var cost = entry.Cost;
             var task = Task.Run(() => entry.OnTryPurchaseWrapper(inv));
             if (_manualFlow) TrackBackground(task);
-            for (int i = 0; i < 100; i++)
+            var poll = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
             {
                 _syncCtx.Pump();
                 if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
                 if (_pendingBundles != null) break;
                 if (task.IsCompleted) break;
-                Thread.Sleep(10);
+                PollPause(i);
             }
             if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
             {
@@ -1468,13 +1480,15 @@ public partial class RunSimulator
         {
             // Run on background thread so card selection can pause (same pattern as event options)
             var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
+            _shopRemovalTask = task;
             if (_manualFlow) TrackBackground(task);
-            for (int i = 0; i < 100; i++)
+            var poll = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
             {
                 _syncCtx.Pump();
                 if (_cardSelector.HasPending) break;
                 if (task.IsCompleted) break;
-                Thread.Sleep(10);
+                PollPause(i);
             }
             if (_cardSelector.HasPending)
             {
@@ -1513,6 +1527,7 @@ public partial class RunSimulator
 
         _syncCtx.Pump();
         WaitForActionExecutor();
+        WaitForEventOption();
         return DetectDecisionPoint();
     }
 
@@ -1545,8 +1560,8 @@ public partial class RunSimulator
         // needs time to complete the upgrade after card selection resolves.
         if (_runState?.CurrentRoom is RestSiteRoom)
         {
-            Thread.Sleep(200);
-            _syncCtx.Pump();
+            // Let the rest option finish (the Smith upgrade runs after the selection resolves).
+            PollUntil(() => _restOptionTask == null || _restOptionTask.IsCompleted || HasPendingSelection, 2000);
             WaitForActionExecutor();
             // Force to map after SMITH completes (same pattern as HEAL)
             Log("Card selection in rest site (SMITH), forcing to map");
@@ -1557,8 +1572,7 @@ public partial class RunSimulator
         // Extra wait for shop card removal: the purchase task needs to finish
         if (_runState?.CurrentRoom is MerchantRoom)
         {
-            Thread.Sleep(200);
-            _syncCtx.Pump();
+            PollUntil(() => _shopRemovalTask == null || _shopRemovalTask.IsCompleted || HasPendingSelection, 2000);
             WaitForActionExecutor();
             Log("Card selection in shop (card removal), refreshing shop state");
         }
@@ -1620,11 +1634,22 @@ public partial class RunSimulator
     {
         if (!CombatManager.Instance.IsInProgress) return;
         var executor = RunManager.Instance.ActionExecutor;
+        var queues = RunManager.Instance.ActionQueueSet;
         int quiet = 0;
         for (int i = 0; i < 1000; i++)
         {
             _syncCtx.Pump();
             if (HasPendingSelection || !CombatManager.Instance.IsInProgress) return;
+            // Fully settled: executor idle, no queued actions, no queued continuations. Confirm
+            // once after yielding (a pool thread may be about to post) and return; this used to
+            // cost a fixed 8 × 2 ms quiet period on every card play.
+            if (!executor.IsRunning && queues.IsEmpty && _syncCtx.IsIdle)
+            {
+                Thread.Yield();
+                _syncCtx.Pump();
+                if (!executor.IsRunning && queues.IsEmpty && _syncCtx.IsIdle) return;
+            }
+            // Executor idle but actions still queued (e.g. waiting on a pause): old quiet period.
             quiet = executor.IsRunning ? 0 : quiet + 1;
             if (quiet >= 8) return;
             Thread.Sleep(2);
@@ -1643,6 +1668,9 @@ public partial class RunSimulator
         if (_manualFlow) return ResumeBackgroundWork();
         _syncCtx.Pump();
         WaitForActionExecutor();
+        // Like select_cards: an event option (e.g. Neow's Hefty Tablet) keeps running after the
+        // selection; without this the next observation was the stale pre-choice event page.
+        WaitForEventOption();
         return DetectDecisionPoint();
     }
 
@@ -1765,12 +1793,14 @@ public partial class RunSimulator
             {
                 // Run on background thread so Smith card selection can pause
                 var task = Task.Run(() => RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(optionIndex));
-                for (int i = 0; i < 100; i++)
+                _restOptionTask = task;
+                var poll = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
                 {
                     _syncCtx.Pump();
                     if (_cardSelector.HasPending) break;
                     if (task.IsCompleted) break;
-                    Thread.Sleep(10);
+                    PollPause(i);
                 }
                 if (_cardSelector.HasPending)
                 {
@@ -1792,9 +1822,7 @@ public partial class RunSimulator
                 Log("Rest site: option chosen (non-Smith), waiting for action then forcing to map");
                 // Give the action time to complete (heal HP, dig for relic, etc.)
                 WaitForActionExecutor();
-                _syncCtx.Pump();
-                Thread.Sleep(200);
-                _syncCtx.Pump();
+                PollUntil(EngineIdle, 200);
                 WaitForActionExecutor();
                 ForceToMap();
                 return MapSelectState();
@@ -1824,13 +1852,14 @@ public partial class RunSimulator
                                 $"Event option failed: {t.Exception?.GetBaseException().Message}"),
                             TaskContinuationOptions.OnlyOnFaulted);
                         _eventOptionTask = task;
-                        for (int i = 0; i < 100; i++)
+                        var poll = System.Diagnostics.Stopwatch.StartNew();
+                        for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
                         {
                             _syncCtx.Pump();
                             if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
                             if (_pendingBundles != null || _pendingCrystalSphere != null) break;
                             if (task.IsCompleted) break;
-                            Thread.Sleep(10);
+                            PollPause(i);
                         }
                         if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null || _pendingCrystalSphere != null)
                         {
@@ -3081,9 +3110,24 @@ public partial class RunSimulator
     }
 
     /// <summary>Compute what a card would look like after upgrading (stats + cost + description).</summary>
+    // after_upgrade depends only on the card id, its upgrade level and its current keywords (it is
+    // built from a fresh canonical clone and diffed against the live keywords), but cloning and
+    // upgrading every deck card on every observation dominated the cost of an observation.
+    private readonly Dictionary<(ModelId, int, string), Dictionary<string, object?>?> _upgradeInfoCache = new();
+
     private Dictionary<string, object?>? GetUpgradedInfo(CardModel card)
     {
         if (!card.IsUpgradable) return null;
+        var keywords = card.Keywords == null ? "" : string.Join(",", card.Keywords.Where(k => k != CardKeyword.None).Select(k => (int)k).OrderBy(k => k));
+        var key = (card.Id, card.CurrentUpgradeLevel, keywords);
+        if (_upgradeInfoCache.TryGetValue(key, out var cached)) return cached;
+        var info = BuildUpgradedInfo(card);
+        _upgradeInfoCache[key] = info;
+        return info;
+    }
+
+    private Dictionary<string, object?>? BuildUpgradedInfo(CardModel card)
+    {
         try
         {
             var clone = ModelDb.GetById<CardModel>(card.Id).ToMutable();
