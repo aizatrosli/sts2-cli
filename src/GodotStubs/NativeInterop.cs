@@ -2,7 +2,7 @@ namespace Godot.NativeInterop;
 
 using Godot;
 
-public static class VariantUtils
+public static partial class VariantUtils
 {
     public static T ConvertTo<T>(Variant v) => default!;
     public static Variant CreateFrom<T>(T value) => new Variant(value);

@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace Godot;
 
 // StringName - wraps string (must be a class, not struct, to match real Godot's type signature)
-public sealed class StringName : IDisposable
+public sealed partial class StringName : IDisposable
 {
     private readonly string? _name;
     public StringName() => _name = "";
@@ -36,7 +36,7 @@ public sealed class NodePath : IDisposable
 }
 
 // Variant - can hold any type
-public struct Variant
+public partial struct Variant
 {
     public enum Type
     {
@@ -47,10 +47,10 @@ public struct Variant
     private readonly object? _value;
     public Variant(object? value) => _value = value;
 
-    public static Variant From<T>(T value) => new(value);
+    public static Variant From<T>(in T from) => new(from);
     public static Variant CreateFrom<T>(T value) => new(value);
 
-    public T As<T>() => (T)_value!;
+    public T As<T>() => _value is T t ? t : default!;
     public object? Obj => _value;
 
     public static implicit operator Variant(bool v) => new(v);
@@ -64,16 +64,19 @@ public struct Variant
     public static implicit operator Variant(Vector2 v) => new(v);
     public static implicit operator Variant(Color v) => new(v);
 
-    public static implicit operator bool(Variant v) => v._value is bool b ? b : false;
-    public static implicit operator int(Variant v) => v._value is int i ? i : 0;
-    public static implicit operator long(Variant v) => v._value is long l ? l : 0;
-    public static implicit operator float(Variant v) => v._value is float f ? f : 0f;
-    public static implicit operator double(Variant v) => v._value is double d ? d : 0;
-    public static implicit operator string(Variant v) => v._value?.ToString() ?? "";
+    // Godot converts out of Variant explicitly (op_Explicit), which is what sts2.dll references.
+    public static explicit operator bool(Variant v) => v.AsBool();
+    public static explicit operator int(Variant v) => (int)v.AsInt64();
+    public static explicit operator long(Variant v) => v.AsInt64();
+    public static explicit operator ulong(Variant v) => (ulong)v.AsInt64();
+    public static explicit operator float(Variant v) => v.AsSingle();
+    public static explicit operator double(Variant v) => v.AsDouble();
+    public static explicit operator string(Variant v) => v.AsString();
+    public static explicit operator Color(Variant v) => v._value is Color c ? c : default;
 }
 
 // Callable - wraps a delegate
-public struct Callable
+public partial struct Callable
 {
     private readonly Delegate? _delegate;
     public Callable(Delegate? d) => _delegate = d;
@@ -173,44 +176,3 @@ public class ScriptPathAttribute : Attribute
 
 [AttributeUsage(AttributeTargets.Class)]
 public class GlobalClassAttribute : Attribute { }
-
-// PropertyInfo for Godot bridge methods
-public struct PropertyInfo
-{
-    public Variant.Type Type;
-    public StringName Name;
-    public PropertyHint Hint;
-    public string HintString;
-    public PropertyUsageFlags Usage;
-    public bool Exported;
-
-    public PropertyInfo(Variant.Type type, StringName name, PropertyHint hint = PropertyHint.None,
-        string hintString = "", PropertyUsageFlags usage = PropertyUsageFlags.Default, bool exported = false)
-    {
-        Type = type; Name = name; Hint = hint; HintString = hintString; Usage = usage; Exported = exported;
-    }
-}
-
-// MethodInfo for Godot bridge methods
-public struct MethodInfo
-{
-    public StringName Name;
-    public PropertyInfo ReturnVal;
-    public MethodFlags Flags;
-    public List<PropertyInfo>? DefaultArguments;
-    public List<PropertyInfo>? Arguments;
-
-    public MethodInfo(StringName name, PropertyInfo returnVal, MethodFlags flags,
-        List<PropertyInfo>? arguments, List<PropertyInfo>? defaultArguments)
-    {
-        Name = name; ReturnVal = returnVal; Flags = flags;
-        Arguments = arguments; DefaultArguments = defaultArguments;
-    }
-}
-
-// GodotSerializationInfo
-public class GodotSerializationInfo
-{
-    public void AddProperty(string name, Variant value) { }
-    public bool TryGetProperty(string name, out Variant value) { value = default; return false; }
-}

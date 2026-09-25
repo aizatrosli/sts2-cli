@@ -125,14 +125,14 @@ public struct Rect2
     public Rect2(Vector2 pos, Vector2 size) { _position = pos; _size = size; }
 }
 
-public struct Transform2D
+public partial struct Transform2D
 {
     public Vector2 X, Y, Origin;
-    public static Transform2D Identity { get; } = new();
+    public static Transform2D Identity { get; } = new(new Vector2(1, 0), new Vector2(0, 1), Vector2.Zero);
     public Transform2D SampleBakedWithRotation() => this;
 }
 
-public static class Mathf
+public static partial class Mathf
 {
     public const float Pi = MathF.PI;
     public const float Tau = MathF.Tau;

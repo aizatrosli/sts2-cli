@@ -1,7 +1,7 @@
 namespace Godot;
 
 // CanvasItem
-public class CanvasItem : Node
+public partial class CanvasItem : Node
 {
     public Color Modulate { get; set; } = Color.White;
     public Color SelfModulate { get; set; } = Color.White;
@@ -21,7 +21,7 @@ public class CanvasItem : Node
 }
 
 // Control
-public class Control : CanvasItem
+public partial class Control : CanvasItem
 {
     public enum FocusModeEnum { None, Click, All }
     public enum MouseFilterEnum { Stop, Pass, Ignore }
@@ -57,8 +57,6 @@ public class Control : CanvasItem
 
     public virtual void _GuiInput(InputEvent @event) { }
 
-    public void Connect(StringName signal, Callable callable) { }
-    public void Disconnect(StringName signal, Callable callable) { }
     public void EmitSignal(StringName signal, params Variant[] args) { }
 }
 
@@ -79,7 +77,7 @@ public class Node2D : CanvasItem
 }
 
 // Resource
-public class Resource : GodotObject
+public partial class Resource : GodotObject
 {
     public string ResourcePath { get; set; } = "";
     public class MethodName { }
@@ -98,12 +96,12 @@ public class PackedScene : Resource
 // Texture types
 public class Texture2D : Resource { }
 public class CompressedTexture2D : Texture2D { }
-public class AtlasTexture : Texture2D
+public partial class AtlasTexture : Texture2D
 {
     public Rect2 Region { get; set; }
     public Texture2D? Atlas { get; set; }
 }
-public class ImageTexture : Texture2D { }
+public partial class ImageTexture : Texture2D { }
 
 // Material types
 public class Material : Resource { }
@@ -180,7 +178,7 @@ public class MethodTweener
 public class IntervalTweener { }
 
 // UI Controls
-public class TextureRect : Control
+public partial class TextureRect : Control
 {
     public new class MethodName : Control.MethodName { }
     public new class PropertyName : Control.PropertyName { }
@@ -307,7 +305,7 @@ public class Timer : Node
 
 // Audio
 public class AudioStream : Resource { }
-public class AudioStreamPlayer : Node
+public partial class AudioStreamPlayer : Node
 {
     public new class SignalName : Node.SignalName
     {
@@ -320,15 +318,15 @@ public class AudioStreamPlayer : Node
 }
 
 // Input
-public class InputEvent : Resource
+public partial class InputEvent : Resource
 {
     public virtual bool IsActionPressed(StringName action, bool allowEcho = false) => false;
     public virtual bool IsActionReleased(StringName action) => false;
     public bool IsPressed() => false;
     public bool IsReleased() => true;
 }
-public class InputEventKey : InputEvent { }
-public class InputEventMouseButton : InputEvent
+public partial class InputEventKey : InputEvent { }
+public partial class InputEventMouseButton : InputEvent
 {
     public Vector2 Position { get; set; }
     public Vector2 GlobalPosition { get; set; }
@@ -340,7 +338,7 @@ public class InputEventMouseMotion : InputEvent
 }
 
 // FileAccess
-public class FileAccess : GodotObject, IDisposable
+public partial class FileAccess : GodotObject, IDisposable
 {
     public enum ModeFlags { Read, Write, ReadWrite, WriteRead }
     public static FileAccess? Open(string path, ModeFlags flags) => null;
@@ -352,7 +350,7 @@ public class FileAccess : GodotObject, IDisposable
 }
 
 // DirAccess
-public class DirAccess : GodotObject, IDisposable
+public partial class DirAccess : GodotObject, IDisposable
 {
     public static bool DirExistsAbsolute(string path) => Directory.Exists(path);
     public static Error MakeDirAbsolute(string path) { try { Directory.CreateDirectory(path); return Error.Ok; } catch { return Error.Failed; } }
@@ -379,7 +377,7 @@ public class AnimationPlayer : Node
 }
 
 // Particles
-public class GpuParticles2D : Node2D
+public partial class GpuParticles2D : Node2D
 {
     public bool Emitting { get; set; }
     public Material? ProcessMaterial { get; set; }
@@ -400,15 +398,15 @@ public class Sprite2D : Node2D
 }
 
 // CharFXTransform for RichTextEffects
-public class CharFXTransform : GodotObject
+public partial class CharFXTransform : GodotObject
 {
     public Color Color { get; set; } = Color.White;
     public Vector2 Offset { get; set; }
     public Transform2D Transform { get; set; }
     public bool Visible { get; set; } = true;
     public double ElapsedTime { get; set; }
-    public uint RelativeIndex { get; set; }
-    public Dictionary<Variant, Variant>? Env { get; set; }
+    public int RelativeIndex { get; set; }
+    public Godot.Collections.Dictionary Env { get; set; } = new();
 }
 
 // RichTextEffect
@@ -435,7 +433,7 @@ public class ResourceFormatLoader : GodotObject
 }
 
 // Image
-public class Image : Resource
+public partial class Image : Resource
 {
     public enum Format { Rgba8 }
     public static Image CreateEmpty(int width, int height, bool useMipmaps, Format format) => new();

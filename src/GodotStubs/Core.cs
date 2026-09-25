@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace Godot;
 
-public class GodotObject
+public partial class GodotObject
 {
     public class SignalName { }
 
@@ -16,8 +16,8 @@ public class GodotObject
     }
 
     // Bridge methods overridden in generated code
-    protected virtual void SaveGodotObjectData(GodotSerializationInfo info) { }
-    protected virtual void RestoreGodotObjectData(GodotSerializationInfo info) { }
+    protected virtual void SaveGodotObjectData(Bridge.GodotSerializationInfo info) { }
+    protected virtual void RestoreGodotObjectData(Bridge.GodotSerializationInfo info) { }
     protected virtual bool InvokeGodotClassMethod(in NativeInterop.godot_string_name method, NativeInterop.NativeVariantPtrArgs args, out NativeInterop.godot_variant ret) { ret = default; return false; }
     protected virtual bool HasGodotClassMethod(in NativeInterop.godot_string_name method) => false;
     protected virtual bool SetGodotClassPropertyValue(in NativeInterop.godot_string_name name, in NativeInterop.godot_variant value) => false;
@@ -26,7 +26,7 @@ public class GodotObject
     protected virtual bool HasGodotClassSignal(in NativeInterop.godot_string_name signal) => false;
 }
 
-public class Node : GodotObject
+public partial class Node : GodotObject
 {
     public enum InternalMode { Disabled, Front, Back }
 
@@ -38,6 +38,8 @@ public class Node : GodotObject
         public static readonly StringName AddChild = "AddChild";
         public static readonly StringName RemoveChild = "RemoveChild";
         public static readonly StringName QueueFree = "QueueFree";
+        public static readonly StringName AddSibling = "AddSibling";
+        public static readonly StringName MoveChild = "MoveChild";
         public static readonly StringName _Ready = "_Ready";
     }
 
@@ -73,7 +75,7 @@ public class Node : GodotObject
         _children.Remove(child);
     }
 
-    public void Reparent(Node newParent)
+    public void Reparent(Node newParent, bool keepGlobalTransform = true)
     {
         _parent?.RemoveChild(this);
         newParent.AddChild(this);
@@ -91,8 +93,6 @@ public class Node : GodotObject
     public int GetChildCount(bool includeInternal = false) => _children.Count;
     public int GetIndex(bool includeInternal = false) => _parent?._children.IndexOf(this) ?? -1;
 
-    public void CallDeferred(StringName method, params Variant[] args) { }
-
     public virtual void _Ready() { }
     public virtual void _EnterTree() { }
     public virtual void _ExitTree() { }
@@ -103,7 +103,7 @@ public class Node : GodotObject
     public virtual void _UnhandledKeyInput(InputEvent @event) { }
 }
 
-public class SceneTree : MainLoop
+public partial class SceneTree : MainLoop
 {
     public new class SignalName : Node.SignalName
     {
@@ -133,14 +133,14 @@ public class SceneTreeTimer : GodotObject
 
 public class MainLoop : GodotObject { }
 
-public static class Engine
+public static partial class Engine
 {
     private static readonly SceneTree _mainLoop = new();
     public static MainLoop GetMainLoop() => _mainLoop;
     public static bool IsEditorHint() => false;
 }
 
-public static class GD
+public static partial class GD
 {
     public static void Print(params object[] args) => Console.Error.WriteLine(string.Join("", args));
     public static void Print(string msg) => Console.Error.WriteLine(msg);
@@ -155,9 +155,9 @@ public static class GD
     public static Variant Str(params Variant[] args) => string.Join("", args.Select(a => a.ToString()));
 }
 
-public static class OS
+public static partial class OS
 {
-    public static void ShellOpen(string uri) { }
+    public static Error ShellOpen(string uri) => Error.Ok;
     public static string GetLocale() => "en";
     public static string GetName() => "headless";
     public static string GetVersion() => "0.0";
@@ -169,14 +169,14 @@ public static class OS
     public static string[] GetCmdlineArgs() => Array.Empty<string>();
 }
 
-public static class ProjectSettings
+public static partial class ProjectSettings
 {
     public static string GlobalizePath(string path) => path;
     public static Variant GetSetting(string name, Variant @default = default) => @default;
-    public static bool LoadResourcePack(string path) => false;
+    public static bool LoadResourcePack(string pack, bool replaceFiles = true, int offset = 0) => false;
 }
 
-public static class ResourceLoader
+public static partial class ResourceLoader
 {
     public enum CacheMode { Reuse, Replace, Ignore }
     public static T? Load<T>(string path, string? typeHint = null, CacheMode cacheMode = CacheMode.Reuse) where T : class => null;
