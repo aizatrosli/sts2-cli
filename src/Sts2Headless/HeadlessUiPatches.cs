@@ -1,7 +1,10 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Audio.Debug;
 using MegaCrit.Sts2.Core.Context;
+using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Models.Monsters;
 using MegaCrit.Sts2.Core.Nodes;
@@ -36,6 +39,8 @@ internal static class HeadlessUiPatches
 
     private static readonly MethodInfo? ShakeTrauma = AccessTools.Method(typeof(NGame), nameof(NGame.ScreenShakeTrauma));
     private static readonly MethodInfo? Rumble = AccessTools.Method(typeof(NGame), nameof(NGame.ScreenRumble));
+    private static readonly MethodInfo? DebugPlay =
+        AccessTools.Method(typeof(NDebugAudioManager), nameof(NDebugAudioManager.Play), new[] { typeof(string), typeof(float), typeof(PitchVariance) });
     private static readonly MethodInfo? PlayOneShot =
         AccessTools.Method(typeof(NAudioManager), nameof(NAudioManager.PlayOneShot), new[] { typeof(string), typeof(float) });
 
@@ -45,12 +50,24 @@ internal static class HeadlessUiPatches
         game?.ScreenRumble(strength, duration, style);
 
     public static void SafePlayOneShot(NAudioManager? audio, string path, float volume) => audio?.PlayOneShot(path, volume);
+    public static int SafeDebugPlay(NDebugAudioManager? audio, string stream, float volume, PitchVariance variance) =>
+        audio?.Play(stream, volume, variance) ?? 0;
+
+    /// <summary>
+    /// The shop's card-removal slot marks its entry used (<c>NMerchantCardRemoval.OnCardRemovalUsed</c>
+    /// → <c>SetUsed</c>); headless nothing did, so removal could be bought again in the same visit.
+    /// </summary>
+    public static void PurchaseCompletedPostfix(MerchantEntry entry)
+    {
+        if (entry is MerchantCardRemovalEntry removal) removal.SetUsed();
+    }
 
     public static void Apply()
     {
         var harmony = new Harmony("sts2headless.ui");
         int nullSafe = PatchMatching(harmony,
-            new[] { typeof(Amalgamator), typeof(PunchOff), typeof(DenseVegetation), typeof(Crusher), typeof(Rocket) },
+            new[] { typeof(Amalgamator), typeof(PunchOff), typeof(DenseVegetation), typeof(Crusher), typeof(Rocket),
+                    typeof(JungleMazeAdventure), typeof(DigRestSiteOption) },
             IsNullSafeTarget, nameof(NullSafeCallTranspiler));
         int trial = PatchMatching(harmony, new[] { typeof(Trial) },
             i => IsLocalContextIsMe(i.operand), nameof(UiGuardOffTranspiler),
@@ -65,6 +82,8 @@ internal static class HeadlessUiPatches
             trial++;
         }
         catch (Exception ex) { Console.Error.WriteLine($"[WARN] Trial.DoubleDown patch failed: {ex.Message}"); }
+        harmony.Patch(AccessTools.Method(typeof(MerchantEntry), nameof(MerchantEntry.InvokePurchaseCompleted)),
+            postfix: new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(PurchaseCompletedPostfix))));
         Console.Error.WriteLine($"[INFO] Headless UI patches: {nullSafe} null-safe call sites, {trial} Trial methods, {rest} DenseVegetation methods");
     }
 
@@ -76,6 +95,7 @@ internal static class HeadlessUiPatches
         if (ShakeTrauma != null) replacements[ShakeTrauma] = AccessTools.Method(typeof(HeadlessUiPatches), nameof(SafeScreenShakeTrauma));
         if (Rumble != null) replacements[Rumble] = AccessTools.Method(typeof(HeadlessUiPatches), nameof(SafeScreenRumble));
         if (PlayOneShot != null) replacements[PlayOneShot] = AccessTools.Method(typeof(HeadlessUiPatches), nameof(SafePlayOneShot));
+        if (DebugPlay != null) replacements[DebugPlay] = AccessTools.Method(typeof(HeadlessUiPatches), nameof(SafeDebugPlay));
         foreach (var ins in instructions)
         {
             // The instance is already on the stack as the first argument, so a static call with
@@ -117,7 +137,7 @@ internal static class HeadlessUiPatches
     // ─── helpers ───
 
     private static bool IsNullSafeTarget(CodeInstruction i) =>
-        i.operand is MethodInfo m && (m == ShakeTrauma || m == Rumble || m == PlayOneShot);
+        i.operand is MethodInfo m && (m == ShakeTrauma || m == Rumble || m == PlayOneShot || m == DebugPlay);
 
     private static bool IsLocalContextIsMe(object? operand) =>
         operand is MethodInfo m && m.DeclaringType == typeof(LocalContext) && m.Name == "IsMe"

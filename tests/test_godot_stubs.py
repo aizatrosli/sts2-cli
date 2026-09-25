@@ -54,3 +54,10 @@ def test_stub_value_types_match_real_godotsharp():
         pytest.skip("set STS2_GODOTSHARP_DLL or STS2_GAME_DIR to compare against the real GodotSharp.dll")
     result = _run_tool("GodotStubDiff", "--real", str(real))
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(not STS2_DLL.is_file(), reason="needs lib/sts2.dll (./setup.sh)")
+def test_testmode_branches_reviewed():
+    """Every TestMode read in gameplay code is on the reviewed allowlist (new ones need review)."""
+    result = _run_tool("TestModeAudit", "--fail")
+    assert result.returncode == 0, result.stdout + result.stderr

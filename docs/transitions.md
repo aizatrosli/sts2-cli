@@ -13,7 +13,12 @@ The JSON protocol can run in two **flows**, chosen per run with the `flow` field
 ```
 
 `start_run` can be sent again at any time to start a fresh run in the same process (an RL
-`reset`); the previous run is torn down first.
+`reset`); the previous run is torn down first. A rejected `start_run` (unknown character,
+ascension outside 0–10, bad flow or act1) keeps the current run.
+
+Seeds work like the game's lobby: a given seed is canonicalized (upper case, `O`→`0`, `I`→`1`,
+trimmed), so the same seed reproduces the in-game run, and a missing seed picks a random one.
+`context.seed` and `context.ascension` report what the run uses.
 
 ## `legal_actions`
 
@@ -70,7 +75,7 @@ re-sync after an `error` response.
 
 | decision | what it mirrors | actions |
 |---|---|---|
-| `map_select` | map screen | `select_map_node {col,row}` |
+| `map_select` | map screen | `select_map_node {col,row}`. At the start of an act only the Ancient is offered; free travel (Winged Boots) offers the whole next row. |
 | `combat_play` | your turn in combat | `play_card {card_index[,target_index]}`, `use_potion {potion_index[,target_index]}`, `discard_potion {potion_index}`, `end_turn` |
 | `card_select` | any card choice screen (upgrade, remove, choose-a-card, including mid-enemy-turn choices like Knowledge Demon's curse) | `select_cards {indices}`, `skip_select` when `min_select` is 0 |
 | `bundle_select` | Scroll Boxes pack choice | `select_bundle {bundle_index}` |
@@ -84,6 +89,10 @@ re-sync after an `error` response.
 | `game_over` | death / victory | none |
 
 `leave_room` is accepted as an alias of `proceed` in manual flow.
+
+Outside combat (map, events, rest sites, shops, treasure, rewards) the top-bar potion popup is
+available as `use_potion {potion_index}` for potions that can be drunk anytime (Fruit Juice,
+Blood Potion, Foul Potion at a merchant...) and `discard_potion {potion_index}` for any potion.
 
 ### Rewards screen details
 

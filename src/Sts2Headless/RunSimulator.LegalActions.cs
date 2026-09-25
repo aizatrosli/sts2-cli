@@ -2,6 +2,7 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Potions;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 
@@ -56,6 +57,7 @@ public partial class RunSimulator
             case "map_select":
                 foreach (var c in Rows(result, "choices"))
                     legal.Add(Act("select_map_node", new() { ["col"] = c["col"], ["row"] = c["row"] }));
+                AddOutOfCombatPotionActions(player, legal);
                 break;
 
             case "combat_play":
@@ -100,17 +102,11 @@ public partial class RunSimulator
 
             case "rewards":
             {
-                var blockedPotion = false;
                 foreach (var r in Rows(result, "rewards"))
-                {
                     if (Flag(r, "enabled", true))
                         legal.Add(Act("claim_reward", new() { ["reward_index"] = r["index"] }));
-                    else if (r.GetValueOrDefault("type") as string == "potion")
-                        blockedPotion = true;
-                }
-                // Make room for a potion reward (the top-bar potion popup's Discard).
-                if (blockedPotion && player.CanUseOrRemovePotions)
-                    AddPotionIndexActions(player, "discard_potion", legal);
+                // The top-bar potion popup (also how you make room for a blocked potion reward).
+                AddOutOfCombatPotionActions(player, legal);
                 legal.Add(Act("proceed"));
                 break;
             }
@@ -122,6 +118,7 @@ public partial class RunSimulator
                 // Auto flow: an event with nothing left to choose is left like the UI's Proceed.
                 if (!_manualFlow && legal.Count == 0)
                     legal.Add(Act("leave_room"));
+                AddOutOfCombatPotionActions(player, legal);
                 break;
 
             case "rest_site":
@@ -133,10 +130,12 @@ public partial class RunSimulator
                 // Auto flow: no usable option (e.g. nothing to upgrade and resting disabled) means leave.
                 if (!_manualFlow && legal.Count == 0)
                     legal.Add(Act("leave_room"));
+                AddOutOfCombatPotionActions(player, legal);
                 break;
 
             case "shop":
                 AddShopActions(player, result, legal);
+                AddOutOfCombatPotionActions(player, legal);
                 break;
 
             case "treasure":
@@ -151,6 +150,7 @@ public partial class RunSimulator
                     legal.Add(Act("skip_relic"));
                 if (Flag(result, "can_proceed", true))
                     legal.Add(Act("proceed"));
+                AddOutOfCombatPotionActions(player, legal);
                 break;
 
             case "crystal_sphere":
@@ -195,10 +195,7 @@ public partial class RunSimulator
             for (int i = 0; i < potions.Count; i++)
             {
                 var p = potions[i];
-                if (p == null || p.IsQueued) continue;
-                var usable = (p.Usage == PotionUsage.CombatOnly || p.Usage == PotionUsage.AnyTime)
-                             && p.PassesCustomUsabilityCheck;
-                if (!usable) continue;
+                if (p == null || !CanUsePotion(p, inCombat: true)) continue;
                 if (p.TargetType == TargetType.AnyEnemy && aliveEnemies == 0) continue;
                 if (p.TargetType == TargetType.AnyEnemy && aliveEnemies > 1)
                 {
@@ -215,6 +212,30 @@ public partial class RunSimulator
 
         legal.Add(Act("end_turn"));
     }
+
+    /// <summary>
+    /// The potion popup outside combat (NPotionPopup): Drink for AnyTime potions that pass their
+    /// own usability check (Fruit Juice, Blood Potion, Foul Potion at a merchant...), Discard for any.
+    /// </summary>
+    private static void AddOutOfCombatPotionActions(Player player, List<Dictionary<string, object?>> legal)
+    {
+        if (!player.CanUseOrRemovePotions) return;
+        var potions = player.Potions?.ToList() ?? new();
+        for (int i = 0; i < potions.Count; i++)
+        {
+            var p = potions[i];
+            if (p == null) continue;
+            if (CanUsePotion(p, inCombat: false))
+                legal.Add(Act("use_potion", new() { ["potion_index"] = i }));
+            legal.Add(Act("discard_potion", new() { ["potion_index"] = i }));
+        }
+    }
+
+    /// <summary>NPotionPopup's Drink button: AnyTime potions always, CombatOnly only in combat, never Automatic.</summary>
+    internal static bool CanUsePotion(PotionModel potion, bool inCombat) =>
+        !potion.IsQueued
+        && (potion.Usage == PotionUsage.AnyTime || (inCombat && potion.Usage == PotionUsage.CombatOnly))
+        && potion.PassesCustomUsabilityCheck;
 
     private static void AddPotionIndexActions(Player player, string action, List<Dictionary<string, object?>> legal)
     {

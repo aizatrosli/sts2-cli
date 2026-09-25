@@ -100,10 +100,11 @@ class TestValidation:
         smith = next(o for o in state["options"] if "SMITH" in str(o).upper())
         state = game.act("choose_option", option_index=smith["index"])
         assert state["decision"] == "card_select" and state["max_select"] == 1
+        upgraded = sum(c["upgraded"] for c in state["player"]["deck"])
         resp = game.act("select_cards", indices=indices)
         assert is_error(resp)
         after = game.send({"cmd": "get_state"})
-        assert sum(c["upgraded"] for c in after["player"]["deck"]) == 0
+        assert sum(c["upgraded"] for c in after["player"]["deck"]) == upgraded
 
     def test_skip_select_rejected_when_min_positive(self, game):
         state = first_combat(game, ["SURVIVOR"] * 5 + ["STRIKE_SILENT"] * 5)
@@ -148,14 +149,12 @@ def win_act1_boss(game, ascension=0):
 
 
 class TestGameRules:
-    @gap(2, "act start offers nodes past the Ancient")
     def test_act_start_only_offers_the_ancient(self, game):
         win_act1_boss(game)
         state = game.act("proceed")
         assert state["decision"] == "map_select" and state["context"]["act"] == 2
         assert [c["type"] for c in state["choices"]] == ["Ancient"]
 
-    @gap(2, "HealBetweenActs heals on top of the Ancient's own heal")
     def test_no_extra_heal_between_acts(self, game):
         win_act1_boss(game, ascension=2)
         game.set_player(hp=20, max_hp=100)
@@ -171,7 +170,6 @@ class TestGameRules:
         assert state["decision"] == "card_select"
         assert state["min_select"] == 1 and "skip_select" not in legal_names(state)
 
-    @gap(2, "shop card removal can be bought repeatedly")
     def test_shop_removal_once_per_visit(self, game):
         to_map(game)
         game.set_player(gold=2000)
@@ -182,7 +180,6 @@ class TestGameRules:
         assert "remove_card" not in legal_names(state)
         assert is_error(game.act("remove_card"))
 
-    @gap(2, "Neutralize patch bypasses attack hooks (Vigor never consumed)")
     def test_neutralize_consumes_vigor(self, game):
         state = first_combat(game, ["TERRAFORMING"] + ["NEUTRALIZE"] * 4)
         state = game.act("play_card", card_index=hand_index(state, "TERRAFORMING"))
@@ -200,14 +197,12 @@ class TestGameRules:
         potions = game.send({"cmd": "get_state"})["player"]["potions"]
         assert len(potions) == 1
 
-    @gap(2, "drinkable potions are never listed outside combat")
     def test_anytime_potion_listed_on_map(self, game):
         to_map(game)
         game.set_player(potions=["FRUIT_JUICE"])
         state = game.send({"cmd": "get_state"})
         assert {"use_potion", "discard_potion"} <= legal_names(state)
 
-    @gap(2, "Jungle Maze 'Join Forces' throws on a null audio singleton")
     def test_jungle_maze_join_forces(self, game):
         to_map(game)
         gold = game.send({"cmd": "get_state"})["player"]["gold"]
@@ -218,10 +213,25 @@ class TestGameRules:
         assert state["player"]["gold"] > gold
 
 
+class TestSeeds:
+    def test_seed_is_canonicalized_like_the_lobby(self, game):
+        a = game.start(seed="fido1")
+        b = game.start(seed="  FID01 ")
+        assert a["context"]["seed"] == b["context"]["seed"] == "F1D01"
+        assert a["options"] == b["options"]
+
+    def test_unseeded_runs_differ(self, game):
+        seeds = {game.send({"cmd": "start_run", "character": "Ironclad"})["context"]["seed"] for _ in range(3)}
+        assert len(seeds) == 3
+
+    def test_testmode_patches_applied(self, game):
+        game.start(seed="tm")
+        assert "TestMode patches: 3/3" in game.stderr_text()
+
+
 # --- Phase 3: robustness -----------------------------------------------------------------
 
 class TestRobustness:
-    @gap(3, "a selection opened while resolving another is wiped (combat wedges)")
     def test_chained_selection_does_not_wedge(self, game):
         to_map(game, character="Silent")
         game.set_player(hp=9999, max_hp=9999, deck=["TOOLS_OF_THE_TRADE"] * 5 + ["DEFEND_SILENT"] * 5)

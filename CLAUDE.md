@@ -53,6 +53,8 @@ Expected: `Completed: 5/5` for every character.
 - **legal_actions** (`RunSimulator.LegalActions.cs`) is computed from the exported decision and live state. Every entry it lists must be accepted by `ExecuteAction`; `python3 python/sts2_env.py N <char> --flow manual [--god]` reports any rejection.
 - **Validation gate** (`RunSimulator.Validation.cs`): `ExecuteAction` only runs actions in the last exported legal set (always on, no opt-out). Anything else returns an error before touching state. Handlers still check their own inputs (defense in depth). A new action must be added to `ComputeLegalActions`, or the gate rejects it. `tools/fuzz_legal.py` probes unlisted actions and checks that rejected ones change nothing.
 - **Selection prefs** (`SelectionPrefsPatches.cs`): prefixes on `CardSelectCmd.From*` record `canSkip` and `CardSelectorPrefs` (cancelable, prompt) because the selector hook drops them.
+- **TestMode**: the engine runs with `TestMode.IsOn`. Gameplay methods that branch on it are forced to the real-game branch in `TestModePatches.cs`. `dotnet run --project tools/TestModeAudit -- --fail` checks every TestMode read in gameplay code against `tools/TestModeAudit/allowlist.txt`. After a game update, review each new site: patch it if it changes gameplay, otherwise allowlist it.
+- **Map travel**: `TravelablePoints` mirrors `NMapScreen.RecalculateTravelability` (Ancient-only at act start, boss/second boss, `MapTravel.GetTravelablePointsFrom`). Healing between acts is the Ancient's own; the adapter adds none.
 
 ## Protocol notes
 

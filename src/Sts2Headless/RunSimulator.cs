@@ -205,7 +205,9 @@ public partial class RunSimulator
             if (!KnownCharacters.Contains(character.ToLowerInvariant()))
                 return Error($"Unknown character: {character}");
             EnsureModelDbInitialized();
-            var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            // Same seed handling as the game's lobby: a typed seed is canonicalized (upper case,
+            // O→0, I→1) so it reproduces the in-game run; no seed means a fresh random one.
+            var seedStr = string.IsNullOrWhiteSpace(seed) ? SeedHelper.GetRandomSeed() : SeedHelper.CanonicalizeSeed(seed);
             if (!TrySelectActs(seedStr, act1, out var acts, out var actError))
                 return Error(actError);
 
@@ -951,8 +953,11 @@ public partial class RunSimulator
             return Error($"Map coord ({col},{row}) is out of range");
         var coord = new MapCoord((byte)col, (byte)row);
         // Check before resetting any room state: a bad coord must not change anything.
-        if (_runState?.Map?.GetPoint(coord) == null)
-            return Error($"No map node at ({col},{row})");
+        var map = _runState?.Map;
+        if (map == null)
+            return Error("No map available");
+        if (!TravelablePoints(map).Any(p => p.coord == coord))
+            return Error($"Map node ({col},{row}) is not reachable from here");
 
         // Reset tracking for new room
         _rewardsProcessed = false;
@@ -1644,14 +1649,19 @@ public partial class RunSimulator
         if (idx < 0 || idx >= potionsList.Count) return Error($"Invalid potion index {idx}");
         var potion = potionsList[idx];
         if (potion == null) return Error($"No potion at index {idx}");
+        if (!player.CanUseOrRemovePotions)
+            return Error("Potions cannot be used right now");
+        if (!CanUsePotion(potion, CombatManager.Instance.IsInProgress))
+            return Error($"{potion.Id.Entry} cannot be used here ({potion.Usage})");
 
         // Determine target based on potion's TargetType first, then fall back to target_index
         Creature? target = null;
         var potionTargetType = potion.TargetType;
 
         // Self-targeting potions (Flex, Fortifier, etc.) ALWAYS target the player
-        // regardless of any target_index the caller provides
-        if (potionTargetType == TargetType.Self || potionTargetType == TargetType.TargetedNoCreature)
+        // regardless of any target_index the caller provides. TargetedNoCreature (Foul Potion
+        // thrown at a merchant) has no creature target.
+        if (potionTargetType == TargetType.Self)
         {
             target = player.Creature;
         }
@@ -1696,21 +1706,18 @@ public partial class RunSimulator
             if (_cardSelector.HasPending || _cardSelector.HasPendingReward)
                 return DetectDecisionPoint();
 
-            // Verify potion was consumed
+            // The engine cancels a use it rejects; the potion then stays (it is never discarded here).
             var afterPotions = player.Potions?.ToList() ?? new();
             if (afterPotions.Contains(potion))
             {
-                // Potion wasn't consumed — manually discard it
-                Log("Potion not consumed by action, manually discarding");
-                MegaCrit.Sts2.Core.Commands.PotionCmd.Discard(potion).GetAwaiter().GetResult();
-                _syncCtx.Pump();
+                Log("Potion was not used (the engine cancelled the action)");
+                return Error($"{potion.Id.Entry} could not be used");
             }
         }
         catch (Exception ex)
         {
             Log($"Use potion failed: {ex.Message}");
-            // Try manual discard as fallback
-            try { MegaCrit.Sts2.Core.Commands.PotionCmd.Discard(potion).GetAwaiter().GetResult(); } catch { }
+            return Error($"Use potion failed: {ex.Message}");
         }
 
         return DetectDecisionPoint();
@@ -1857,36 +1864,6 @@ public partial class RunSimulator
         return DetectDecisionPoint();
     }
 
-    /// <summary>
-    /// Headless mode skips Godot transition callbacks that normally trigger between-act healing
-    /// (AncientEventModel.BeforeEventStarted). Replicates the original sts2.dll formula:
-    ///   healAmount = MaxHp - CurrentHp  (i.e. heal to full)
-    ///   if Ascension >= 2: healAmount *= 0.8
-    /// No-op if the engine already healed (missingHp &lt;= 0), so this is safe alongside any
-    /// future engine path that does fire the callback.
-    /// Adapted from PR #83 commit cf75bec by @tianyumyum.
-    /// </summary>
-    private void HealBetweenActs()
-    {
-        if (_runState == null) return;
-        var player = _runState.Players[0];
-        if (player.Creature == null) return;
-
-        var currentHp = player.Creature.CurrentHp;
-        var maxHp = player.Creature.MaxHp;
-        var missingHp = maxHp - currentHp;
-        if (missingHp <= 0) return;
-
-        decimal healAmount = missingHp;
-        if (RunManager.Instance.HasAscension((AscensionLevel)2))
-            healAmount *= 0.8m;
-
-        var newHp = currentHp + (int)Math.Ceiling(healAmount);
-        if (newHp > maxHp) newHp = maxHp;
-        SetField(player.Creature, "_currentHp", newHp);
-        Log($"Between-act heal: {currentHp} → {newHp} (missing={missingHp}, ascension2+={RunManager.Instance.HasAscension((AscensionLevel)2)})");
-    }
-
     private Dictionary<string, object?> DoProceed(Player player)
     {
         Log("Proceeding");
@@ -1910,7 +1887,6 @@ public partial class RunSimulator
                 }
                 RunManager.Instance.EnterNextAct().GetAwaiter().GetResult();
                 WaitForActionExecutor();
-                HealBetweenActs();
                 return DetectDecisionPoint();
             }
         }
@@ -2175,70 +2151,14 @@ public partial class RunSimulator
             if (map == null)
                 return Error("No map available");
         }
-        var currentCoord = _runState!.CurrentMapCoord;
-
-        List<Dictionary<string, object?>> choices;
-        if (currentCoord.HasValue)
-        {
-            var currentPoint = map.GetPoint(currentCoord.Value);
-            if (currentPoint == null)
+        var choices = TravelablePoints(map)
+            .Select(p => new Dictionary<string, object?>
             {
-                Log($"GetPoint returned null for coord ({currentCoord.Value.col},{currentCoord.Value.row}), falling back to start");
-                // Current coord is invalid (stale after forced room transition); treat as no position
-                choices = new List<Dictionary<string, object?>>();
-                var sp = map.StartingMapPoint;
-                if (sp?.Children != null)
-                {
-                    foreach (var child in sp.Children)
-                    {
-                        choices.Add(new Dictionary<string, object?>
-                        {
-                            ["col"] = (int)child.coord.col,
-                            ["row"] = (int)child.coord.row,
-                            ["type"] = child.PointType.ToString(),
-                        });
-                    }
-                }
-            }
-            else
-            {
-                choices = (currentPoint.Children ?? Enumerable.Empty<MapPoint>())
-                    .Select(child => new Dictionary<string, object?>
-                    {
-                        ["col"] = (int)child.coord.col,
-                        ["row"] = (int)child.coord.row,
-                        ["type"] = child.PointType.ToString(),
-                    })
-                    .ToList();
-            }
-        }
-        else
-        {
-            // Starting point — pick from starting row
-            var startPoint = map.StartingMapPoint;
-            choices = new List<Dictionary<string, object?>>
-            {
-                new()
-                {
-                    ["col"] = (int)startPoint.coord.col,
-                    ["row"] = (int)startPoint.coord.row,
-                    ["type"] = startPoint.PointType.ToString(),
-                }
-            };
-            // Add all children of start point as well since we can travel to them
-            if (startPoint.Children != null)
-            {
-                foreach (var child in startPoint.Children)
-                {
-                    choices.Add(new Dictionary<string, object?>
-                    {
-                        ["col"] = (int)child.coord.col,
-                        ["row"] = (int)child.coord.row,
-                        ["type"] = child.PointType.ToString(),
-                    });
-                }
-            }
-        }
+                ["col"] = (int)p.coord.col,
+                ["row"] = (int)p.coord.row,
+                ["type"] = p.PointType.ToString(),
+            })
+            .ToList();
 
         return new Dictionary<string, object?>
         {
@@ -2252,6 +2172,31 @@ public partial class RunSimulator
             ["act_name"] = _loc.Act(_runState.Act?.Id.Entry ?? "OVERGROWTH"),
             ["floor"] = _runState.ActFloor,
         };
+    }
+
+    /// <summary>
+    /// The nodes the map screen lets you travel to, as NMapScreen.RecalculateTravelability computes
+    /// them: only the act's starting point (its Ancient) before any node is visited; the second
+    /// boss after the first; the boss after the last row; otherwise MapTravel.GetTravelablePointsFrom,
+    /// which also covers free travel (Winged Boots, Flight).
+    /// </summary>
+    private List<MapPoint> TravelablePoints(ActMap map)
+    {
+        var visited = _runState!.VisitedMapCoords;
+        if (visited == null || visited.Count == 0)
+            return new List<MapPoint> { map.StartingMapPoint };
+        var last = visited[visited.Count - 1];
+        if (map.SecondBossMapPoint != null && last == map.BossMapPoint.coord)
+            return new List<MapPoint> { map.SecondBossMapPoint };
+        if (last.row == map.GetRowCount() - 1)
+            return new List<MapPoint> { map.BossMapPoint };
+        var point = map.GetPoint(last);
+        if (point == null)
+        {
+            Log($"Last visited coord ({last.col},{last.row}) not on the map; falling back to the starting point");
+            return new List<MapPoint> { map.StartingMapPoint };
+        }
+        return MapTravel.GetTravelablePointsFrom(_runState, point).ToList();
     }
 
     private Dictionary<string, object?> CombatPlayState(Player player)
@@ -2608,7 +2553,6 @@ public partial class RunSimulator
                 RunManager.Instance.EnterNextAct().GetAwaiter().GetResult();
                 _syncCtx.Pump();
                 WaitForActionExecutor();
-                HealBetweenActs();
             }
             catch (Exception ex) { Log($"EnterNextAct: {ex.Message}"); }
             return DetectDecisionPoint();
@@ -3240,6 +3184,8 @@ public partial class RunSimulator
             ["act_name"] = _loc.Act(_runState.Act?.Id.Entry ?? "OVERGROWTH"),
             ["floor"] = _runState.ActFloor,
             ["room_type"] = _runState.CurrentRoom?.RoomType.ToString(),
+            ["seed"] = _runState.Rng?.StringSeed,
+            ["ascension"] = _runState.AscensionLevel,
         };
 
         // Boss encounter info — use BossEncounter?.Id?.Entry
@@ -3324,6 +3270,9 @@ public partial class RunSimulator
 
         // Keep what the UI knows about each card selection (cancelable, can skip, prompt).
         SelectionPrefsPatches.Apply();
+
+        // Gameplay methods that give test-only results under TestMode (see TestModePatches).
+        TestModePatches.Apply();
 
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
@@ -3603,11 +3552,16 @@ public partial class RunSimulator
             return _pendingTcs.Task;
         }
 
+        // Clear the pending state before completing the task: TrySetResult runs the engine's
+        // continuation inline, and that continuation can open the next selection (Burst replaying
+        // a discard, Knowledge Demon's curse leading into a start-of-turn discard). Clearing
+        // afterwards would wipe that new selection and wedge the combat.
         public void ResolvePending(IEnumerable<CardModel> selected)
         {
-            _pendingTcs?.TrySetResult(selected);
+            var tcs = _pendingTcs;
             PendingOptions = null;
             _pendingTcs = null;
+            tcs?.TrySetResult(selected);
         }
 
         public void ResolvePendingByIndices(int[] indices)
@@ -3622,9 +3576,10 @@ public partial class RunSimulator
 
         public void CancelPending()
         {
-            _pendingTcs?.TrySetResult(Array.Empty<CardModel>());
+            var tcs = _pendingTcs;
             PendingOptions = null;
             _pendingTcs = null;
+            tcs?.TrySetResult(Array.Empty<CardModel>());
         }
 
         // Pending card reward from events (GetSelectedCardReward blocks until resolved)
@@ -3941,25 +3896,6 @@ public partial class RunSimulator
             }
             catch (Exception ex) { Console.Error.WriteLine($"[WARN] Crystal Sphere patch: {ex.Message}"); }
 
-            // Patch Neutralize.OnPlay to avoid NullRef in DamageCmd.Attack().Execute()
-            try
-            {
-                var neutralizeType = typeof(MegaCrit.Sts2.Core.Models.Cards.Neutralize);
-                var neutralizeOnPlay = neutralizeType.GetMethod("OnPlay",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                if (neutralizeOnPlay != null)
-                {
-                    var neutPrefix = typeof(LocPatches).GetMethod(nameof(LocPatches.NeutralizePrefix),
-                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-                    if (neutPrefix != null)
-                    {
-                        harmony.Patch(neutralizeOnPlay, new HarmonyMethod(neutPrefix));
-                        Console.Error.WriteLine("[INFO] Patched Neutralize.OnPlay");
-                    }
-                }
-            }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Neutralize patch: {ex.Message}"); }
-
             // Patch HasEntry to always return true
             PatchMethod(harmony, typeof(LocTable), "HasEntry", nameof(LocPatches.HasEntryPrefix));
 
@@ -4025,26 +3961,6 @@ public partial class RunSimulator
             return false;
         }
 
-
-        /// <summary>Harmony prefix: replace Neutralize.OnPlay with safe damage+weak.</summary>
-        public static bool NeutralizePrefix(CardModel __instance, ref Task __result,
-            PlayerChoiceContext choiceContext, CardPlay cardPlay)
-        {
-            if (cardPlay.Target == null) { __result = Task.CompletedTask; return false; }
-            __result = NeutralizeSafe(__instance, choiceContext, cardPlay);
-            return false;
-        }
-
-        private static async Task NeutralizeSafe(CardModel card, PlayerChoiceContext ctx, CardPlay play)
-        {
-            try
-            {
-                await CreatureCmd.Damage(ctx, play.Target!, card.DynamicVars.Damage, card, play);
-                await PowerCmd.Apply<WeakPower>(ctx, play.Target!, card.DynamicVars["WeakPower"].BaseValue,
-                    card.Owner.Creature, card, false);
-            }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Neutralize safe: {ex.Message}"); }
-        }
 
         public static bool HasEntryPrefix(ref bool __result)
         {
