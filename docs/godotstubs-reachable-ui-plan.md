@@ -27,8 +27,7 @@ Done, in a cloud session without the game installed:
 - GodotStubDiff against that NuGet DLL: 515 members compared, 0 mismatches.
 
 Not done:
-1. The audit on every pushed branch has only three tiers: gameplay, tooling and ui. None
-   of them has a `reachable-ui` tier, so the audit can't yet say whether the list is complete.
+1. ~~The audit had no `reachable-ui` tier.~~ Added in Phase 1.
 2. The task names 12 of the 14 missing members. The other two are unknown. The best guesses
    are `Input.MouseMode` and `Curve2D.SampleBaked`, and both are already stubbed.
 3. Nothing has run against `lib/sts2.dll` or the game's own `GodotSharp.dll`, and the
@@ -36,10 +35,13 @@ Not done:
 
 ---
 
-## Phase 1: add the `reachable-ui` tier to GodotStubAudit
+## Phase 1: add the `reachable-ui` tier to GodotStubAudit — done
 
-Skip this phase if the tier already exists locally and is only unpushed. In that case, push
-it and go to Phase 2.
+Implemented as designed below, with two differences: the fixture lives in
+`tests/fixtures/godot_audit/` (a fake GodotSharp built as a "real" and a "stub" variant, plus
+a fake game assembly), and a static constructor of a called type is also an edge. Tested by
+`test_audit_reachable_ui_tier` / `test_audit_depth_option` in `tests/test_godot_stubs.py`,
+which need no game files. Not yet run on the real `sts2.dll` (Phase 2).
 
 Design (all in `tools/GodotStubAudit/Program.cs`):
 - **Call graph.** While `ScanBody` walks IL, record an edge from the current MethodDef for
