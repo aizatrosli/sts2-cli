@@ -38,7 +38,7 @@ def test_interactive_launcher_without_steam_fallback(character):
     env.pop("STS2_GAME_DIR", None)
     result = subprocess.run(
         [sys.executable, str(PLAY_PATH), "--character", character,
-         "--seed", "cli_5005", "--lang", "en", "--no-log"],
+         "--seed", "cli_5005", "--no-log"],
         input="quit\nn\n", capture_output=True, text=True,
         cwd=ROOT, env=env, timeout=30,
     )

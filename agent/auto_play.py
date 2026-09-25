@@ -105,7 +105,7 @@ def pick_best_card(hand, enemies, osty, energy, rnd, inc, player_block=0, player
 def combat_turn(d):
     """Play one combat turn: pick and play cards ONE AT A TIME with fresh state. Returns state after end_turn."""
     rnd = d.get("round", 1)
-    enemies_str = " + ".join(f"{en['name']['zh']}{en['hp']}hp" for en in d.get("enemies", []))
+    enemies_str = " + ".join(f"{en['name']}{en['hp']}hp" for en in d.get("enemies", []))
     max_plays = 8
     cards_played = []
     for _ in range(max_plays):
@@ -198,7 +198,7 @@ def handle_card_reward(d):
             best_idx = c["index"]
 
     if best_score >= 15 and deck_size < 18:
-        print(f"  PICK: {cards[best_idx]['name']['zh']} (score={best_score})")
+        print(f"  PICK: {cards[best_idx]['name']} (score={best_score})")
         return action("select_card_reward", card_index=best_idx)
     else:
         print(f"  SKIP card reward (deck={deck_size})")
@@ -221,7 +221,7 @@ def handle_shop(d):
         name = c["name"]
         cost = c["cost"]
         if name in priority_names and cost <= gold:
-            print(f"  BUY: {c['name']['zh']} ({cost}g)")
+            print(f"  BUY: {c['name']} ({cost}g)")
             result = action("buy_card", card_index=c["index"])
             gold -= cost
             deck_size += 1
@@ -261,7 +261,7 @@ def handle_rest(d):
                 if score > best_score:
                     best_score = score
                     best_idx = c["index"]
-            print(f"    Upgrade: {cards[best_idx]['name']['zh']}")
+            print(f"    Upgrade: {cards[best_idx]['name']}")
             return action("select_cards", indices=str(best_idx))
         return result
 
@@ -312,11 +312,11 @@ def handle_event(d):
         hp_loss = vars_.get("HpLoss", 0)
         if hp_loss > 0 and player["hp"] < player["max_hp"] * 0.5:
             continue
-        print(f"  EVENT: {opt['title']['zh']} {vars_}")
+        print(f"  EVENT: {opt['title']} {vars_}")
         return action("choose_option", option_index=opt["index"])
 
     # Fallback: first option
-    print(f"  EVENT: {options[0]['title']['zh']} (fallback)")
+    print(f"  EVENT: {options[0]['title']} (fallback)")
     return action("choose_option", option_index=0)
 
 def use_potions_at_boss(d):
@@ -337,7 +337,7 @@ def play_game():
     print(f"Starting Necrobinder run (seed={seed})...")
     d = cmd({"cmd": "start_run", "character": "Necrobinder", "seed": seed})
 
-    boss_name = d.get("context", {}).get("boss", {}).get("name", {}).get("zh", "?")
+    boss_name = d.get("context", {}).get("boss", {}).get("name", "?")
     print(f"Boss: {boss_name}")
 
     max_steps = 2000

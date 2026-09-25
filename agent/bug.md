@@ -82,7 +82,7 @@
 ## [FIXED] BUG-009: BBCode tags in card/relic descriptions (2026-03-22, fixed 2026-03-22)
 - **Decision type**: all
 - **Description**: Card and relic descriptions contained raw BBCode tags like [gold], [/blue], [b], [sine].
-- **Fix**: Added StripBBCode() to LocLookup.Bilingual() that strips all BBCode tags.
+- **Fix**: Added StripBBCode() to LocLookup (now `LocLookup.Text()`) that strips all BBCode tags.
 - **Relevant code**: Sts2Headless/RunSimulator.cs (LocLookup class)
 
 ## [FIXED] BUG-011: NullReferenceException on select_map_node after leaving shop (2026-03-22, fixed 2026-03-22)

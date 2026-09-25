@@ -15,9 +15,7 @@ Expected: `Completed: 5/5` for every character.
 
 ## Localization
 
-- Always use the game's official Chinese translations (from `localization_zhs/`)
-- Never invent translations — look them up
-- All user-facing strings must go through `t(en, zh)` for bilingual support
+- The repo is English-only. Names and text come from the game's official English tables (`localization_eng/`, refreshed by `scripts/extract_localization.py`); never invent names — look them up
 - Template variables like `{Damage}`, `{Block}`, `{MaxHp}` must be resolved to actual values before display
 
 ## Build
@@ -37,7 +35,7 @@ Expected: `Completed: 5/5` for every character.
 - `python/sts2_env.py` — Gym-style RL wrapper + manual-flow random-agent test
 - `src/Sts2Headless/RunSimulator.Flow.cs` / `RunSimulator.LegalActions.cs` — manual (UI-faithful) flow, legal action enumeration
 - `lib/` — game DLLs (not in repo, copied by setup.sh)
-- `localization_eng/`, `localization_zhs/` — bilingual loc data
+- `localization_eng/` — official English loc data
 
 ## Conventions
 

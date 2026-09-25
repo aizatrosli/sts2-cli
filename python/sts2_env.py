@@ -66,10 +66,9 @@ def default_reward(prev_obs, obs):
 
 
 class Sts2Env:
-    def __init__(self, flow="manual", lang="en", timeout=30.0, max_steps=5000,
+    def __init__(self, flow="manual", timeout=30.0, max_steps=5000,
                  reward_fn=default_reward, verbose=False):
         self.flow = flow
-        self.lang = lang
         self.timeout = timeout
         self.max_steps = max_steps
         self.reward_fn = reward_fn
@@ -124,7 +123,7 @@ class Sts2Env:
 
     def reset(self, character="Ironclad", seed=None, ascension=0, options=None):
         cmd = {"cmd": "start_run", "character": character, "ascension": ascension,
-               "lang": self.lang, "flow": self.flow}
+               "flow": self.flow}
         if seed is not None:
             cmd["seed"] = str(seed)
         if options:

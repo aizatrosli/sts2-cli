@@ -251,7 +251,7 @@ public partial class RunSimulator
                     if (p.Potion != null)
                     {
                         info["name"] = _loc.Potion(p.Potion.Id.Entry);
-                        info["description"] = _loc.Bilingual("potions", p.Potion.Id.Entry + ".description");
+                        info["description"] = _loc.Text("potions", p.Potion.Id.Entry + ".description");
                     }
                     info["enabled"] = player.HasOpenPotionSlots;
                     break;
@@ -260,7 +260,7 @@ public partial class RunSimulator
                     if (rr.Relic != null)
                     {
                         info["name"] = _loc.Relic(rr.Relic.Id.Entry);
-                        info["description"] = _loc.Bilingual("relics", rr.Relic.Id.Entry + ".description");
+                        info["description"] = _loc.Text("relics", rr.Relic.Id.Entry + ".description");
                     }
                     break;
                 case CardReward:
@@ -533,13 +533,13 @@ public partial class RunSimulator
             return null;
 
         var eventEntry = ev?.Id?.Entry ?? "";
-        var eventName = _loc.Bilingual("ancients", eventEntry + ".title");
+        var eventName = _loc.Text("ancients", eventEntry + ".title");
         if (eventName == eventEntry + ".title")
             eventName = _loc.Event(eventEntry);
         string? description = null;
         if (ev?.Description != null)
         {
-            var d = _loc.Bilingual(ev.Description.LocTable, ev.Description.LocEntryKey);
+            var d = _loc.Text(ev.Description.LocTable, ev.Description.LocEntryKey);
             if (d != ev.Description.LocEntryKey) description = d;
         }
 
@@ -556,7 +556,7 @@ public partial class RunSimulator
                 new()
                 {
                     ["index"] = 0,
-                    ["title"] = _loc.Bilingual("events", "PROCEED.title"),
+                    ["title"] = _loc.Text("events", "PROCEED.title"),
                     ["text_key"] = "PROCEED",
                     ["is_locked"] = false,
                     ["is_proceed"] = true,
@@ -588,7 +588,7 @@ public partial class RunSimulator
                 {
                     ["index"] = i,
                     ["name"] = _loc.Relic(r.Id.Entry),
-                    ["description"] = _loc.Bilingual("relics", r.Id.Entry + ".description"),
+                    ["description"] = _loc.Text("relics", r.Id.Entry + ".description"),
                 }).ToList();
         }
 

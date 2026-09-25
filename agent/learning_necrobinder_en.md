@@ -36,8 +36,7 @@ Block only (p=10), Enfeebling (p=12), powers deprioritized (p=200)
 
 ## Targeting
 - Fogmog: target boss, ignore Eye With Teeth (respawns)
-- Kill shot: target if HP <= card_dmg + 3
-- Otherwise: highest threat first
+- Kill shot: target if HP <= card_dmg + 3; otherwise highest threat first
 
 ## Calcify (Upgraded)
 - +6 damage to ALL Osty attacks (Unleash, Flatten, Fetch, Sic 'Em)
@@ -50,11 +49,12 @@ Block only (p=10), Enfeebling (p=12), powers deprioritized (p=200)
 - **Bygone Effigy** (127hp): 23 dmg/turn after sleep, NEVER fight < 60 HP
 - **Phrog Parasite**: spawns 4 Wrigglers + Infection cards on death, AoE critical
 - **Mawler** (72hp): 6+ turn sustained fight, save Osty for big Unleash
-- **Shrinker Beetle** (+Fuzzy Wurm): kill Beetle first; Shrink reduces all attacks
-- **Fogmog** (74hp): Eye respawns w/ Illusion; 10+ round fight drains 30+ HP
+- **Shrinker Beetle** (39hp, +Fuzzy Wurm): kill Beetle first; Shrink reduces all attacks by 2-4 and drags the fight out
+- **Slithering Strangler** (53hp): tankiest normal monster, +12 dmg/turn. **Tracker Raider**: up to 64 dmg in one turn
+- **Fogmog** (74hp): Eye respawns w/ Illusion; 10+ round fight drains 30+ HP. Clear the Illusion first each turn, then hit Fogmog; only take it with 50+ HP
 
 ## Multi-Enemy Crisis (#1 cause of death)
-- Slime+Flyconid: 40-60 HP loss. 4-slime: 50+ HP. Raiders: 30-60 HP.
+- Slime+Flyconid: 40-60 HP loss (Flyconid opens a mid-combat card selection). 4-slime: 50+ HP. Raiders: 30-60 HP (65 → 12 is typical).
 
 ## Kin Priest Boss (190hp + 2x58-59hp followers)
 - Followers buff Priest Str each turn — killing them is critical but they have 58+ HP
@@ -72,13 +72,13 @@ Block only (p=10), Enfeebling (p=12), powers deprioritized (p=200)
 - 23 HP is certain death — confirmed
 - Friendship relic's -2 Str severely cripples damage output
 - **252hp requires sustained DPS** — starter deck Strikes/Unleash only do ~15 dmg/turn, need 17+ rounds
-- **Flatten (Pressure) is ESSENTIAL** — 2-cost Osty 12dmg is massive recurring damage with BT/Wisp energy
+- **Flatten is ESSENTIAL** — 2-cost Osty 12dmg is massive recurring damage with BT/Wisp energy; always pick it over Defy
 - Turn 1 usually Buff (no attack) — immediately play Powers (Neurosurge, Calcify), go all-in
 - **Power Potion triggers card_select** — use BEFORE combat starts or on non-attack turns only
 
 ## Neow Choice
 - Best: Precarious Shears (remove 2) > Stone Humidifier (+5 maxHP/rest) > Nutritious Oyster (+maxHP) > Golden Pearl (150g)
-- NEVER take Cursed Pearl — Greed curse dilutes deck
+- NEVER take Cursed Pearl — Greed curse dilutes deck. Wellspring: Bathe adds Guilty curses, avoid it
 
 ## Shop Strategy
 - Remove Strike ALWAYS (even over buying cards)
@@ -89,8 +89,8 @@ Block only (p=10), Enfeebling (p=12), powers deprioritized (p=200)
 - Defy is Ethereal — must play the turn drawn or it Exhausts
 - Reave (9dmg + Soul) excellent early — damage + draw engine
 - Avoid forced elites floors 4-6 without scaling or HP > 55
-- 4 consecutive monster floors with no rest = death trap
-- Poke scales with Osty HP — free 6+ dmg when Osty healthy
+- 4 consecutive monster floors with no rest = death trap; 5+ almost guarantees low HP before the boss
+- Poke scales with Osty HP — free 6+ dmg when Osty healthy, and strips Slippery
 - Drain Power = strongest single-target (10 dmg + draw 2)
 - Devour Life: Power Potion can offer this — heals on attack, excellent for boss
 - **Eradicate is MULTI-HIT** — "Deal 11 dmg X times" where X = current energy. 3e = 33 dmg (3 hits). AMAZING vs Slippery bosses (strips 1 layer per hit)

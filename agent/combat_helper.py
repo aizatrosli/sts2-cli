@@ -145,7 +145,7 @@ if __name__ == "__main__":
     if dec == "card_reward":
         print(f"WIN HP={p.get('hp')}/{p.get('max_hp')} g={p.get('gold')}")
         for c in result.get("cards", []):
-            print(f"  C{c['index']}: {c['name']['zh']}({c.get('cost','?')}) {c.get('rarity','')} {c['type']} {c.get('stats',{})}")
+            print(f"  C{c['index']}: {c['name']}({c.get('cost','?')}) {c.get('rarity','')} {c['type']} {c.get('stats',{})}")
     elif dec == "game_over":
         print(f"DEAD HP={p.get('hp')}")
     else:

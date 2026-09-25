@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh official English/Chinese tables from the installed Godot PCK."""
+"""Refresh the official English localization tables from the installed Godot PCK."""
 import argparse
 import hashlib
 import json
@@ -31,7 +31,7 @@ def extract(pck: Path, root: Path) -> int:
             entry_flags, = read('<I')
             parts = name.removeprefix('res://').split('/')
             if (len(parts) == 3 and parts[0] == 'localization'
-                    and parts[1] in ('eng', 'zhs') and parts[2].endswith('.json')):
+                    and parts[1] == 'eng' and parts[2].endswith('.json')):
                 if entry_flags:
                     raise ValueError(f'Unsupported PCK entry flags: {name}')
                 tables.append((parts, base + offset, size, digest))
@@ -45,7 +45,7 @@ def extract(pck: Path, root: Path) -> int:
             json.loads(data)
             contents.append((root / f'localization_{parts[1]}' / parts[2], data))
     if not contents:
-        raise ValueError('No English/Chinese localization tables found')
+        raise ValueError('No English localization tables found')
     for path, data in contents:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
