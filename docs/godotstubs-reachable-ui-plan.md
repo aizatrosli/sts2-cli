@@ -1,0 +1,153 @@
+# GodotStubs reachable-UI plan
+
+Goal: no GodotSharp type or member that gameplay code can reach is missing from
+`src/GodotStubs`. "Reachable" means UI code (`MegaCrit.Sts2.Core.Nodes.*`, …) called from
+gameplay code within two call edges. A gap there throws `MissingMethodException` in the turn
+loop, the same as a gameplay-tier gap does.
+
+Done when:
+- GodotStubAudit reports 0 gameplay gaps and 0 reachable-ui gaps against the game's
+  `GodotSharp.dll`.
+- GodotStubDiff reports 0 mismatches against the game's `GodotSharp.dll`.
+- The CLAUDE.md regression gate passes: `Completed: 5/5` for every character.
+
+## Where it stands (branch `claude/tender-ritchie-bdt7k0`, commit de007d1)
+
+Done, in a cloud session without the game installed:
+- Stubs added for all 16 items named in the task: `Godot.Curve2D`,
+  `Godot.Input/MouseModeEnum`, `Control.AddThemeColorOverride`, `Control.RotationDegrees`,
+  `Control.SetGlobalPosition`, `Control.PropertyName.Size`, `Curve2D.GetBakedLength`,
+  `Node2D.GetAngleTo`, `ParticleProcessMaterial.Color`, `Path2D.Curve`,
+  `PropertyTweener.FromCurrent`, `Texture2D.GetWidth` and `Viewport.GuiGetFocusOwner`.
+- `Line2D.AddPoint(Vector2, int index = -1)` replaces the `int?` overload.
+- New `Vector2`/`Mathf` `BezierInterpolate` and `CubicInterpolate`, which Curve2D baking
+  uses.
+- Signatures were checked by reflection against the NuGet `GodotSharp 4.5.1` package, the
+  same version the stub declares. All 51 new or changed declarations are identical.
+- GodotStubDiff against that NuGet DLL: 515 members compared, 0 mismatches.
+
+Not done:
+1. The audit on every pushed branch has only three tiers: gameplay, tooling and ui. None
+   of them has a `reachable-ui` tier, so the audit can't yet say whether the list is complete.
+2. The task names 12 of the 14 missing members. The other two are unknown. The best guesses
+   are `Input.MouseMode` and `Curve2D.SampleBaked`, and both are already stubbed.
+3. Nothing has run against `lib/sts2.dll` or the game's own `GodotSharp.dll`, and the
+   regression gate has not run.
+
+---
+
+## Phase 1: add the `reachable-ui` tier to GodotStubAudit
+
+Skip this phase if the tier already exists locally and is only unpushed. In that case, push
+it and go to Phase 2.
+
+Design (all in `tools/GodotStubAudit/Program.cs`):
+- **Call graph.** While `ScanBody` walks IL, record an edge from the current MethodDef for
+  every `call`, `callvirt`, `newobj`, `ldftn` or `ldvirtftn` operand that resolves to an
+  sts2 MethodDef. That covers a direct MethodDef token, or a MethodSpec whose generic method
+  is a MethodDef.
+  - Virtual calls: for `callvirt` to a virtual method, also add edges to every override in
+    sts2 (the MethodImpl table, plus same-name, same-signature overrides in derived types).
+    This over-approximates, which is the safe direction.
+  - Async and iterator methods: the body runs in the compiler-generated state machine's
+    `MoveNext`. Add a stub → `MoveNext` edge by reading `AsyncStateMachineAttribute` /
+    `IteratorStateMachineAttribute`, so the stub doesn't count as an extra hop.
+  - Lambdas: `ldftn` into a compiler-generated closure type is already an edge. The
+    closure's namespace comes from `OuterNamespace`, as it does today.
+- **Per-method origins.** Next to the per-namespace `Origins` counts, keep the set of
+  MethodDefs that reference each Godot type or member.
+- **Classification.** A reference that would be tier `ui` becomes `reachable-ui` when any
+  referencing UI method is within two edges of a gameplay-tier method. Find this with a
+  bounded BFS from all gameplay methods, depth ≤ 2, recording predecessors.
+  - Add `--depth N` (default 2).
+  - Order the tiers gameplay < reachable-ui < tooling < ui, so `TierOfAll` still takes the
+    most severe.
+- **Output.**
+  - Add a `reachable-ui` column to the summary table.
+  - The default listing prints the gameplay tier and the reachable-ui tier. Each
+    reachable-ui entry gets its real declaration (with `--reference`) and one shortest
+    gameplay → UI path, e.g.
+    `Models.Cards.X.OnPlay → Nodes.Vfx.NFoo.Create → Godot.Curve2D.GetBakedLength()`.
+  - JSON gets `tier: "reachable-ui"` and a `path` array.
+- **`--fail`** also exits 1 on a reachable-ui gap, because it crashes gameplay the same way.
+- **Test.** A small fixture assembly under `tools/GodotStubAudit/Fixture/` (a gameplay
+  class calling a `…Nodes.` class that calls a missing Godot member, one hop and three hops
+  deep) with a unit test that asserts the one-hop reference is `reachable-ui` and the
+  three-hop reference is `ui`. This runs without the game, so it can go in
+  `tests/test_godot_stubs.py` unconditionally.
+
+Size: M. This phase can be done in a cloud session, since the fixture replaces sts2.dll.
+
+## Phase 2: audit against the real game (needs the game install)
+
+```bash
+dotnet build src/Sts2Headless/Sts2Headless.csproj
+G="$STS2_GAME_DIR"
+dotnet run --project tools/GodotStubAudit -- --reference "$G/GodotSharp.dll" --fail
+dotnet run --project tools/GodotStubAudit -- --reference "$G/GodotSharp.dll" --all --json audit.json
+```
+
+- Expect 0 gameplay and 0 reachable-ui gaps. For each remaining entry (the two unnamed
+  members, or anything the new call graph finds beyond the original 16), add it following
+  the GodotStubs rules. Take the exact declaration from the audit's `real:` line: visuals
+  are no-ops, and anything that computes a value computes like Godot.
+- Check the enum section is empty. It now covers `Input.MouseModeEnum`.
+- Read the printed call paths for the Curve2D and Path2D entries.
+  - `Path2D.Curve` starts as an empty `Curve2D`, not Godot's default of null, because
+    headless nodes come from `new T()` with no scene data.
+  - If a gameplay path reads points from the curve and expects scene content, decide
+    whether a Harmony no-op on that UI method (`PatchCosmeticNoOp`) is better than the stub.
+
+## Phase 3: value-type diff against the game's GodotSharp
+
+```bash
+dotnet run --project tools/GodotStubDiff -- --real "$G/GodotSharp.dll"
+STS2_GAME_DIR="$G" python3 -m pytest tests/test_godot_stubs.py -q
+```
+
+Expect 0 mismatches. If the game's build differs from NuGet 4.5.1 (a custom engine build),
+fix the stub to match the game's DLL, not the NuGet one.
+
+## Phase 4: regression gate
+
+1. **Full runs.** The CLAUDE.md loop, 5 runs per character, `Completed: 5/5` each.
+2. **Manual flow.** `python3 python/sts2_env.py 20 <char> --flow manual` for each
+   character: no rejected legal actions and no `warnings` or `patch_warnings`.
+3. **Trajectories.** Record with the pre-change build (`4f53751`), then compare with the
+   new build:
+   ```bash
+   python3 tools/trajectory.py record base.jsonl   # on 4f53751
+   python3 tools/trajectory.py compare base.jsonl  # on de007d1 + Phase 1–2
+   ```
+   A run is expected to differ only where the old build hit a `MissingMethodException` on
+   one of these members. Explain each differing run from its engine warnings before
+   accepting it.
+4. **Test suite.** `python3 -m pytest tests -q`.
+
+## Phase 5: docs
+
+- CLAUDE.md, GodotStubs bullet:
+  - Describe the `reachable-ui` tier and `--depth`.
+  - Change "the gameplay tier must be empty" to "the gameplay and reachable-ui tiers must be
+    empty".
+- Delete this file once the phases have landed. The CLAUDE.md bullet carries what remains.
+
+## Follow-ups (not needed for "done")
+
+- **Base types that differ from GodotSharp.** `Control.PropertyName` derives
+  `Node.PropertyName` (real: `CanvasItem.PropertyName`). `PropertyTweener` derives
+  `object` (real: `Tweener`), and `Texture2D` derives `Resource` (real: `Texture`). Member
+  lookup still works, but a cast or `is` against the real base fails. Add a base-type check
+  to the audit for types sts2 references.
+- **Incoherent Node2D state.** In the stub, `Position`, `GlobalPosition`, `RotationDegrees`
+  and `GlobalTransform` are independent auto-properties. `GetAngleTo` uses
+  `GlobalTransform`, as Godot does, so it ignores a `GlobalPosition` that was set
+  separately. Making Node2D derive its transform from position, rotation and scale would fix
+  that, but it can change trajectories and needs the Phase 4 compare.
+
+## Open decisions
+
+1. Should `--fail` fail on reachable-ui gaps? Proposed: yes.
+2. Should `Path2D.Curve` default to an empty curve (current) or to null (Godot)? Proposed:
+   keep the empty curve unless Phase 2's call paths show a null check in sts2 that changes
+   behaviour.
