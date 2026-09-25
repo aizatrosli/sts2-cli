@@ -218,6 +218,8 @@ public partial class RunSimulator
     private static readonly LocLookup _loc = new();
     private bool _eventOptionChosen;
     private int _lastEventOptionCount;
+    // Auto flow: the thread-pool task running the last chosen event option (see WaitForEventOption).
+    private Task? _eventOptionTask;
 
     // Pending rewards for card selection (populated after combat, before proceeding)
     private List<Reward>? _pendingRewards;
@@ -1253,6 +1255,7 @@ public partial class RunSimulator
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();
+            WaitForEventOption();
             return DetectDecisionPoint();
         }
 
@@ -1295,6 +1298,7 @@ public partial class RunSimulator
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();
+            WaitForEventOption();
             return DetectDecisionPoint();
         }
         if (_pendingCardReward != null)
@@ -1499,6 +1503,7 @@ public partial class RunSimulator
         if (_manualFlow) return ResumeBackgroundWork();
         _syncCtx.Pump();
         WaitForActionExecutor();
+        WaitForEventOption();
 
         // Extra wait for rest-site SMITH: the background ChooseLocalOption task
         // needs time to complete the upgrade after card selection resolves.
@@ -1523,6 +1528,19 @@ public partial class RunSimulator
         }
 
         return DetectDecisionPoint();
+    }
+
+    /// <summary>
+    /// Auto flow: an event option whose effect opened a selection keeps running on the thread
+    /// pool after the selection resolves (Wood Carvings transforms the chosen card, then
+    /// finishes the event). Let it finish, or raise its next selection, before exporting the
+    /// decision; otherwise the stale options go out and the next choose_option enumerates
+    /// them while the task replaces them ("Collection was modified").
+    /// </summary>
+    private void WaitForEventOption()
+    {
+        if (_eventOptionTask is { IsCompleted: false } task && _runState?.CurrentRoom is EventRoom)
+            WaitForTaskOrPending(task);
     }
 
     /// <summary>
@@ -1759,6 +1777,7 @@ public partial class RunSimulator
                         _lastEventOptionCount = options.Count;
                         // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block
                         var task = Task.Run(() => options[optionIndex].Chosen());
+                        _eventOptionTask = task;
                         for (int i = 0; i < 100; i++)
                         {
                             _syncCtx.Pump();
