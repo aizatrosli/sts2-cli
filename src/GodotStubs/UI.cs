@@ -41,6 +41,12 @@ public class Control : CanvasItem
         All = 2,
         Accessibility = 3,
     }
+    public enum FocusBehaviorRecursiveEnum : long
+    {
+        Inherited = 0,
+        Disabled = 1,
+        Enabled = 2,
+    }
     public enum MouseFilterEnum : long
     {
         Stop = 0,
@@ -106,6 +112,8 @@ public class Control : CanvasItem
     public NodePath FocusNeighborRight { get; set; } = new();
     public NodePath FocusNeighborTop { get; set; } = new();
     public void SetFocusMode(FocusModeEnum mode) => FocusMode = mode;
+    public FocusBehaviorRecursiveEnum FocusBehaviorRecursive { get; set; }
+    public void SetFocusBehaviorRecursive(FocusBehaviorRecursiveEnum focusBehaviorRecursive) => FocusBehaviorRecursive = focusBehaviorRecursive;
     public void SetAnchorsPreset(LayoutPreset preset, bool keepOffsets = false) { }
     public void SetGlobalPosition(Vector2 position, bool keepOffsets = false) => GlobalPosition = position;
     public void AddThemeFontOverride(StringName name, Font font) { }
@@ -172,6 +180,7 @@ public class AtlasTexture : Texture2D
     public Texture2D? Atlas { get; set; }
 }
 public class ImageTexture : Texture2D { }
+public class CurveXyzTexture : Texture2D { }
 
 // Material types
 public class Material : Resource { }
@@ -314,7 +323,22 @@ public class MarginContainer : Container { }
 public class CenterContainer : Container { }
 public class ScrollContainer : Container { }
 public class SubViewportContainer : Container { }
-public class SubViewport : Viewport { }
+public class SubViewport : Viewport
+{
+    public enum UpdateMode : long
+    {
+        Disabled = 0,
+        Once = 1,
+        WhenVisible = 2,
+        WhenParentVisible = 3,
+        Always = 4,
+    }
+
+    // Godot defaults: 512x512, no 2D override, render when visible.
+    public Vector2I Size { get; set; } = new(512, 512);
+    public Vector2I Size2DOverride { get; set; }
+    public UpdateMode RenderTargetUpdateMode { get; set; } = UpdateMode.WhenVisible;
+}
 
 public class Label : Control
 {

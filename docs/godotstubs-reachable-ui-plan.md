@@ -26,12 +26,21 @@ Done, in a cloud session without the game installed:
   same version the stub declares. All 51 new or changed declarations are identical.
 - GodotStubDiff against that NuGet DLL: 515 members compared, 0 mismatches.
 
-Not done:
-1. ~~The audit had no `reachable-ui` tier.~~ Added in Phase 1.
-2. The task names 12 of the 14 missing members. The other two are unknown. The best guesses
-   are `Input.MouseMode` and `Curve2D.SampleBaked`, and both are already stubbed.
-3. Nothing has run against `lib/sts2.dll` or the game's own `GodotSharp.dll`, and the
-   regression gate has not run.
+Then, with the game's Windows data directory (`setup.sh <dir>` in the cloud session):
+1. Phase 1 added the `reachable-ui` tier to the audit.
+2. Phase 2: against the pre-change stub (`4f53751`) the tier lists 6 types and 22 members.
+   That covers the original 16 items, plus `Input.set_MouseMode` (one of the two unnamed
+   members). It also finds 12 more gaps: `Control.FocusBehaviorRecursiveEnum` /
+   `SetFocusBehaviorRecursive`, `CurveXyzTexture`, `SubViewport.UpdateMode` / `Size` /
+   `Size2DOverride` / `RenderTargetUpdateMode`, `CpuParticles2D.EmissionSphereRadius`,
+   `Curve2D.SampleBakedWithRotation`, `SceneTree.CreateTween` and
+   `Viewport.GuiReleaseFocus`. All are stubbed now. `SampleBakedWithRotation` uses Godot's
+   baked Bezier tangents, via new `Vector2.BezierDerivative`/`Slerp` and
+   `Mathf.BezierDerivative`. The audit now reports 0 gameplay, 0 reachable-ui and 0 enum
+   issues (`--fail` exits 0).
+3. Phase 3: the game's `GodotSharp.dll` is byte-identical to NuGet `GodotSharp 4.5.1`.
+   GodotStubDiff against it compares 519 members with 0 mismatches.
+4. Phase 4: see the result under Phase 4 below.
 
 ---
 
@@ -96,7 +105,7 @@ STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/Slay the
 - The full audit listing is saved as `audit-all.log` and `audit.json`. Those two files are
   the input for fixing anything Phase 2 finds.
 
-## Phase 2: audit against the real game (needs the game install)
+## Phase 2: audit against the real game — done
 
 ```bash
 dotnet build src/Sts2Headless/Sts2Headless.csproj
@@ -116,7 +125,7 @@ dotnet run --project tools/GodotStubAudit -- --reference "$G/GodotSharp.dll" --a
   - If a gameplay path reads points from the curve and expects scene content, decide
     whether a Harmony no-op on that UI method (`PatchCosmeticNoOp`) is better than the stub.
 
-## Phase 3: value-type diff against the game's GodotSharp
+## Phase 3: value-type diff against the game's GodotSharp — done
 
 ```bash
 dotnet run --project tools/GodotStubDiff -- --real "$G/GodotSharp.dll"
@@ -165,7 +174,8 @@ fix the stub to match the game's DLL, not the NuGet one.
 
 ## Open decisions
 
-1. Should `--fail` fail on reachable-ui gaps? Proposed: yes.
-2. Should `Path2D.Curve` default to an empty curve (current) or to null (Godot)? Proposed:
-   keep the empty curve unless Phase 2's call paths show a null check in sts2 that changes
-   behaviour.
+1. `--fail` fails on reachable-ui gaps. Implemented in Phase 1.
+2. `Path2D.Curve` stays an empty curve. Phase 2's path shows why: it is read by
+   `NCardFlyPowerVfx.PlayAnim` (reached from `CardModel.PlayPowerCardFlyVfx`), which calls
+   `GetBakedLength` on it. Godot's null default would throw there; the empty curve gives
+   length 0.

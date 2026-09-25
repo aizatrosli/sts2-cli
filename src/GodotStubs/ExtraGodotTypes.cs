@@ -20,6 +20,7 @@ public class Line2D : Node2D
 public class CpuParticles2D : Node2D
 {
     public bool Emitting { get; set; }
+    public float EmissionSphereRadius { get; set; } = 1f;
 }
 
 public class Marker2D : Node2D { }
@@ -44,6 +45,7 @@ public class Curve2D : Resource
     private float _bakeInterval = 5f;
     private Vector2[] _bakedPoints = Array.Empty<Vector2>();
     private float[] _bakedDist = Array.Empty<float>();
+    private Vector2[] _bakedForward = Array.Empty<Vector2>();
     private bool _dirty = true;
 
     public float BakeInterval
@@ -97,10 +99,28 @@ public class Curve2D : Resource
         int pc = _bakedPoints.Length;
         if (pc == 0) return Vector2.Zero;
         if (pc == 1) return _bakedPoints[0];
-        offset = Mathf.Clamp(offset, 0f, _bakedDist[^1]);
+        var (idx, frac) = FindInterval(offset);
+        return SampleBaked(idx, frac, cubic);
+    }
 
+    // Godot: position from SampleBaked, rotation from the Bezier tangents at the interval's ends
+    // (slerped), side = forward rotated +90°.
+    public Transform2D SampleBakedWithRotation(float offset = 0, bool cubic = false)
+    {
+        Bake();
+        int pc = _bakedPoints.Length;
+        if (pc == 0) return Transform2D.Identity;
+        if (pc == 1) return new Transform2D(Vector2.Right, Vector2.Down, _bakedPoints[0]);
+        var (idx, frac) = FindInterval(offset);
+        Vector2 forward = _bakedForward[idx].Slerp(_bakedForward[idx + 1], frac).Normalized();
+        return new Transform2D(forward, new Vector2(-forward.Y, forward.X), SampleBaked(idx, frac, cubic));
+    }
+
+    private (int Idx, float Frac) FindInterval(float offset)
+    {
+        offset = Mathf.Clamp(offset, 0f, _bakedDist[^1]);
         // Binary search for the baked interval holding offset.
-        int start = 0, end = pc, idx = (end + start) / 2;
+        int start = 0, end = _bakedDist.Length, idx = (end + start) / 2;
         while (start < idx)
         {
             if (offset <= _bakedDist[idx]) end = idx;
@@ -108,8 +128,12 @@ public class Curve2D : Resource
             idx = (end + start) / 2;
         }
         float span = _bakedDist[idx + 1] - _bakedDist[idx];
-        float frac = span < float.Epsilon ? 0.5f : (offset - _bakedDist[idx]) / span;
+        return (idx, span < float.Epsilon ? 0.5f : (offset - _bakedDist[idx]) / span);
+    }
 
+    private Vector2 SampleBaked(int idx, float frac, bool cubic)
+    {
+        int pc = _bakedPoints.Length;
         if (!cubic) return _bakedPoints[idx].Lerp(_bakedPoints[idx + 1], frac);
         Vector2 pre = idx > 0 ? _bakedPoints[idx - 1] : _bakedPoints[idx];
         Vector2 post = idx < pc - 2 ? _bakedPoints[idx + 2] : _bakedPoints[idx + 1];
@@ -124,20 +148,54 @@ public class Curve2D : Resource
         {
             _bakedPoints = Array.Empty<Vector2>();
             _bakedDist = Array.Empty<float>();
+            _bakedForward = Array.Empty<Vector2>();
+            return;
+        }
+        if (_points.Count == 1)
+        {
+            _bakedPoints = new[] { _points[0].Position };
+            _bakedDist = new[] { 0f };
+            _bakedForward = new[] { new Vector2(0f, 0.1f) };
             return;
         }
         var points = new List<Vector2> { _points[0].Position };
+        var forward = new List<Vector2> { Tangent(0, 0f) };
         for (int i = 0; i < _points.Count - 1; i++)
         {
             var mid = new SortedDictionary<float, Vector2>();
             BakeSegmentEvenLength(mid, 0f, 1f, _points[i].Position, _points[i].Out, _points[i + 1].Position, _points[i + 1].In, 0, 10, _bakeInterval);
-            points.AddRange(mid.Values);
+            foreach (var (t, p) in mid)
+            {
+                points.Add(p);
+                forward.Add(Tangent(i, t));
+            }
             points.Add(_points[i + 1].Position);
+            forward.Add(Tangent(i, 1f));
         }
         _bakedPoints = points.ToArray();
+        _bakedForward = forward.ToArray();
         _bakedDist = new float[_bakedPoints.Length];
         for (int i = 1; i < _bakedPoints.Length; i++)
             _bakedDist[i] = _bakedDist[i - 1] + _bakedPoints[i].DistanceTo(_bakedPoints[i - 1]);
+    }
+
+    // Godot's _calculate_tangent for segment i at t, with its corner cases for zero-length handles.
+    private Vector2 Tangent(int i, float t)
+    {
+        Vector2 begin = _points[i].Position, end = _points[i + 1].Position;
+        Vector2 control1 = begin + _points[i].Out, control2 = end + _points[i + 1].In;
+        const float cmpEpsilon = 0.00001f;
+        if (MathF.Abs(t) < cmpEpsilon && ApproxEqual(control1, begin)) return (end - begin).Normalized();
+        if (MathF.Abs(t - 1f) < cmpEpsilon && ApproxEqual(control2, end)) return (end - begin).Normalized();
+        return begin.BezierDerivative(control1, control2, end, t).Normalized();
+
+        static bool ApproxEqual(Vector2 a, Vector2 b) => Approx(a.X, b.X) && Approx(a.Y, b.Y);
+        static bool Approx(float a, float b)
+        {
+            if (a == b) return true;
+            float tolerance = Math.Max(cmpEpsilon * MathF.Abs(a), cmpEpsilon);
+            return MathF.Abs(a - b) < tolerance;
+        }
     }
 
     private static void BakeSegmentEvenLength(SortedDictionary<float, Vector2> bake, float begin, float end, Vector2 a, Vector2 @out, Vector2 b, Vector2 @in, int depth, int maxDepth, float length)
