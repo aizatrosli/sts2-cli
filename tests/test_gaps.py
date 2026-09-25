@@ -264,3 +264,31 @@ class TestFuzz:
         summary = Fuzzer(args).run()
         assert summary["steps"] > 0
         assert summary["violations"] == 0
+
+    def test_stdout_is_json_only(self, game):
+        state = to_map(game)
+        game.act("select_map_node", col=state["choices"][0]["col"], row=state["choices"][0]["row"])
+        assert game.stdout_noise == []
+
+    def test_no_patch_warnings(self, game):
+        assert "patch_warnings" not in game.start(seed="pw")
+
+    def test_set_player_relics_are_owned(self, game):
+        to_map(game)
+        resp = game.set_player(relics=["WINGED_BOOTS"])
+        assert resp["type"] == "ok", resp
+        assert [r["name"] for r in resp["player"]["relics"]] == ["Winged Boots"]
+        state = game.enter_room("rest")  # hooks run over the relics; an unowned relic threw here
+        assert state["type"] == "decision", state
+        assert is_error(game.set_player(relics=["NOT_A_RELIC"]))
+        assert [r["name"] for r in game.send({"cmd": "get_state"})["player"]["relics"]] == ["Winged Boots"]
+
+    def test_winged_boots_free_travel(self, game):
+        state = to_map(game)
+        normal = {(c["col"], c["row"]) for c in state["choices"]}
+        game.set_player(relics=["WINGED_BOOTS"])
+        state = game.send({"cmd": "get_state"})
+        row = state["choices"][0]["row"]
+        whole_row = {(n["col"], n["row"]) for r in game.get_map()["rows"] for n in r if n["row"] == row}
+        assert {(c["col"], c["row"]) for c in state["choices"]} == whole_row
+        assert normal <= whole_row

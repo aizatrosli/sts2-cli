@@ -126,9 +126,10 @@ Each item is small; land them as separate commits inside the phase.
    `DigRestSiteOption.DoLocalPostSelectVfx` to the `HeadlessUiPatches` null-safe
    `NDebugAudioManager` call targets; guard `NCapstoneContainer.Instance.Close` in
    `RunManager.AbandonInternal` (Trial Double Down).
-9. **Localization patches** — `LocTable.GetRawText` returns the key only when the entry is
-   missing; drop the `HasEntry`/`IsLocalKey`/`LocString.Exists` overrides now that the real
-   tables load (affects Ancient/Architect dialogue selection RNG).
+9. **Localization patches** — moved to Phase 5: `LocTable.GetRawText` returns the key only
+   when the entry is missing, and the `HasEntry`/`IsLocalKey`/`LocString.Exists` overrides are
+   dropped, once SmartFormat is initialized (both change what the engine formats; affects
+   Ancient/Architect dialogue selection RNG).
 10. **Seeds** — canonicalize with `SeedHelper.CanonicalizeSeed` as the lobby does, and echo
     the canonical seed; regenerate seed baselines.
 
@@ -160,7 +161,9 @@ Each item is small; land them as separate commits inside the phase.
    (`RelicCmd.Obtain` / `AddRelicInternal`) and validates ids before clearing.
 10. **Hypothesis to verify first:** Godot `CallDeferred` runs inline in the stub; if a test
     shows re-entrancy in `ActionQueueSet` cancel loops, queue deferred calls and drain them
-    in `Pump`.
+    in `Pump`. (Not reproduced so far; determinism checks stay byte-identical.)
+11. The iteration-count wait loops become wall-clock deadlines together with the Phase 4
+    throughput work (same code).
 
 ## Phase 4 — throughput
 

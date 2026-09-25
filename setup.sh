@@ -168,34 +168,8 @@ var module = ModuleDefinition.ReadModule(dllPath, new ReaderParameters {
 
 int patches = 0;
 
-// Patch 1: Task.Yield() — make YieldAwaitable.YieldAwaiter.IsCompleted return true
-// This prevents async deadlocks in headless mode
-foreach (var type in module.Types)
-{
-    foreach (var nested in type.NestedTypes)
-    {
-        foreach (var nested2 in nested.NestedTypes)
-        {
-            if (nested2.Name.Contains("YieldAwaiter") || nested2.Name == "<>c")
-            {
-                foreach (var method in nested2.Methods)
-                {
-                    if (method.Name == "get_IsCompleted" && method.Body != null)
-                    {
-                        var il = method.Body.GetILProcessor();
-                        il.Body.Instructions.Clear();
-                        il.Emit(OpCodes.Ldc_I4_1);
-                        il.Emit(OpCodes.Ret);
-                        patches++;
-                        Console.WriteLine($"  Patched {type.Name}.{nested.Name}.{nested2.Name}.IsCompleted");
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Patch 2: WaitUntilQueueIsEmptyOrWaitingOnNonPlayerDrivenAction → return Task.CompletedTask
+// WaitUntilQueueIsEmptyOrWaitingOnNonPlayerDrivenAction → return Task.CompletedTask
+// (Task.Yield is handled at runtime by a Harmony patch in RunSimulator, not here.)
 foreach (var type in module.Types)
 {
     foreach (var method in type.Methods)
@@ -217,17 +191,29 @@ foreach (var type in module.Types)
 }
 
 Console.WriteLine($"Applied {patches} patches");
+if (patches != 1)
+{
+    // The target moved or was renamed in a game update: fail instead of shipping an unpatched dll.
+    Console.Error.WriteLine($"ERROR: expected exactly 1 IL patch, applied {patches}. Update setup.sh for this game version.");
+    return 1;
+}
 var outPath = dllPath + ".patched";
 module.Write(outPath);
 module.Dispose();
 File.Delete(dllPath);
 File.Move(outPath, dllPath);
 Console.WriteLine("Done!");
+return 0;
 CSHARP
 
 REPO_DIR="$(pwd)"
 cd "$PATCH_DIR"
-$DOTNET run -- "$REPO_DIR/lib/sts2.dll" 2>&1
+if ! $DOTNET run -- "$REPO_DIR/lib/sts2.dll" 2>&1; then
+    cd "$REPO_DIR"
+    rm -rf "$PATCH_DIR"
+    echo "❌ IL patching failed (see above)."
+    exit 1
+fi
 cd "$REPO_DIR"
 rm -rf "$PATCH_DIR"
 

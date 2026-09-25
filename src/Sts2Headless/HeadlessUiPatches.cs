@@ -81,10 +81,13 @@ internal static class HeadlessUiPatches
                 new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(TrialDoubleDownPrefix))));
             trial++;
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Trial.DoubleDown patch failed: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.Warn($"Trial.DoubleDown patch failed: {ex.Message}"); }
         harmony.Patch(AccessTools.Method(typeof(MerchantEntry), nameof(MerchantEntry.InvokePurchaseCompleted)),
             postfix: new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(PurchaseCompletedPostfix))));
         Console.Error.WriteLine($"[INFO] Headless UI patches: {nullSafe} null-safe call sites, {trial} Trial methods, {rest} DenseVegetation methods");
+        PatchReport.Expect("Headless UI null-safe call sites", nullSafe, 11);
+        PatchReport.Expect("Headless UI Trial methods", trial, 3);
+        PatchReport.Expect("Headless UI DenseVegetation methods", rest, 1);
     }
 
     // ─── transpilers ───
@@ -177,7 +180,7 @@ internal static class HeadlessUiPatches
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"[WARN] Event patch failed for {method.DeclaringType?.Name}.{method.Name}: {ex.Message}");
+                    PatchReport.Warn($"Event patch failed for {method.DeclaringType?.Name}.{method.Name}: {ex.Message}");
                 }
             }
         }

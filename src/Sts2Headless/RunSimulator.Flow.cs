@@ -710,7 +710,7 @@ public partial class RunSimulator
         {
             foreach (var t in _backgroundTasks.Where(t => t.IsCompleted).ToList())
             {
-                if (t.IsFaulted) Log($"Background task failed: {t.Exception?.GetBaseException()}");
+                if (t.IsFaulted) PatchReport.EngineWarning($"Background task failed: {t.Exception?.GetBaseException()}");
                 _backgroundTasks.Remove(t);
             }
             return _backgroundTasks.FirstOrDefault();

@@ -40,8 +40,12 @@ namespace Sts2Headless;
 /// </summary>
 internal class InlineSynchronizationContext : SynchronizationContext
 {
-    private readonly Queue<(SendOrPostCallback, object?)> _queue = new();
-    private bool _executing;
+    // Posts arrive from the main thread and from pool threads (event options, rewards, chests).
+    // While any callback runs, other posts are queued and drained afterwards (by the running
+    // thread or by Pump on the main thread), which keeps engine continuations serialized. The
+    // queue is concurrent so posts from several threads cannot corrupt it.
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback, object?)> _queue = new();
+    private volatile bool _executing;
 
     public override void Post(SendOrPostCallback d, object? state)
     {
@@ -50,19 +54,14 @@ internal class InlineSynchronizationContext : SynchronizationContext
             _queue.Enqueue((d, state));
             return;
         }
-        // removed debug log
 
         // Execute inline immediately, then drain any nested posts
         _executing = true;
         try
         {
             d(state);
-            // Drain any callbacks that were queued during execution
-            while (_queue.Count > 0)
-            {
-                var (cb, st) = _queue.Dequeue();
-                cb(st);
-            }
+            while (_queue.TryDequeue(out var item))
+                item.Item1(item.Item2);
         }
         finally
         {
@@ -78,11 +77,10 @@ internal class InlineSynchronizationContext : SynchronizationContext
     public void Pump()
     {
         // Drain any remaining queued callbacks
-        while (_queue.Count > 0)
+        while (_queue.TryDequeue(out var item))
         {
-            var (cb, st) = _queue.Dequeue();
             _executing = true;
-            try { cb(st); }
+            try { item.Item1(item.Item2); }
             finally { _executing = false; }
         }
     }
@@ -331,18 +329,22 @@ public partial class RunSimulator
 
             if (args.TryGetValue("relics", out var relicsEl))
             {
-                var list = GetBackingList<RelicModel>(player, "_relics");
-                if (list != null)
+                // Resolve every id first so an unknown one leaves the relics untouched.
+                var wanted = new List<RelicModel>();
+                foreach (var rEl in relicsEl.EnumerateArray())
                 {
-                    list.Clear();
-                    foreach (var rEl in relicsEl.EnumerateArray())
-                    {
-                        var id = rEl.GetString();
-                        if (id == null) continue;
-                        var model = ModelDb.GetById<RelicModel>(new ModelId("RELIC", id));
-                        if (model != null) list.Add(model.ToMutable());
-                    }
+                    var id = rEl.GetString();
+                    if (id == null) continue;
+                    var model = ModelDb.AllRelics.FirstOrDefault(r => string.Equals(r.Id.Entry, id, StringComparison.OrdinalIgnoreCase));
+                    if (model == null) return Error($"Unknown relic: {id}");
+                    wanted.Add(model);
                 }
+                // Owner-aware add/remove (a bare list insert left relics without an owner, and every
+                // later hook threw). This sets state only: pickup effects (AfterObtained) do not run.
+                foreach (var r in player.Relics.ToList())
+                    player.RemoveRelicInternal(r, silent: true);
+                foreach (var model in wanted)
+                    player.AddRelicInternal(model.ToMutable(), silent: true);
             }
             if (args.TryGetValue("deck", out var deckEl))
             {
@@ -1244,8 +1246,15 @@ public partial class RunSimulator
                         Log("Nuclear fallback SUCCEEDED — play phase resumed");
                     else
                     {
-                        Log("Nuclear fallback FAILED — forcing game_over to escape deadlock");
-                        return GameOverState(false);
+                        // Never report a made-up defeat: the combat is still running. Say the engine
+                        // is stuck so the client can reset instead of learning from a fake game_over.
+                        Log("Nuclear fallback FAILED — engine stuck at end of turn");
+                        return new Dictionary<string, object?>
+                        {
+                            ["type"] = "error",
+                            ["message"] = "engine_stuck: the enemy turn did not finish; reset the run",
+                            ["engine_stuck"] = true,
+                        };
                     }
                 }
                 catch (Exception ex)
@@ -1807,8 +1816,13 @@ public partial class RunSimulator
                     {
                         _eventOptionChosen = true;
                         _lastEventOptionCount = options.Count;
-                        // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block
-                        var task = Task.Run(() => options[optionIndex].Chosen());
+                        // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block.
+                        // Read the option here: the live list can change before the pool thread runs.
+                        var option = options[optionIndex];
+                        var task = Task.Run(() => option.Chosen());
+                        _ = task.ContinueWith(t => PatchReport.EngineWarning(
+                                $"Event option failed: {t.Exception?.GetBaseException().Message}"),
+                            TaskContinuationOptions.OnlyOnFaulted);
                         _eventOptionTask = task;
                         for (int i = 0; i < 100; i++)
                         {
@@ -3415,7 +3429,7 @@ public partial class RunSimulator
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[WARN] Failed to patch Cmd.Wait: {ex.Message}");
+            PatchReport.Warn($"Failed to patch Cmd.Wait: {ex.Message}");
         }
     }
 
@@ -3429,7 +3443,7 @@ public partial class RunSimulator
                 .FirstOrDefault(m => m.Name == "Play");
             if (playMethod == null)
             {
-                Console.Error.WriteLine("[WARN] Could not find TalkCmd.Play to patch");
+                PatchReport.Warn("Could not find TalkCmd.Play to patch");
                 return;
             }
             var prefix = typeof(YieldPatches).GetMethod(nameof(YieldPatches.TalkCmdPlayPrefix),
@@ -3442,7 +3456,7 @@ public partial class RunSimulator
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[WARN] Failed to patch TalkCmd.Play: {ex.Message}");
+            PatchReport.Warn($"Failed to patch TalkCmd.Play: {ex.Message}");
         }
     }
 
@@ -3455,7 +3469,7 @@ public partial class RunSimulator
                 System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
             if (method == null || prefix == null || method.ReturnType != typeof(void))
             {
-                Console.Error.WriteLine($"[WARN] Could not patch {type.Name}.{methodName}");
+                PatchReport.Warn($"Could not patch {type.Name}.{methodName}");
                 return;
             }
             new Harmony("sts2headless.cosmetic").Patch(method, new HarmonyMethod(prefix));
@@ -3463,7 +3477,7 @@ public partial class RunSimulator
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[WARN] Failed to patch {type.Name}.{methodName}: {ex.Message}");
+            PatchReport.Warn($"Failed to patch {type.Name}.{methodName}: {ex.Message}");
         }
     }
 
@@ -3495,7 +3509,7 @@ public partial class RunSimulator
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[WARN] Failed to patch Task.Yield: {ex.Message}");
+            PatchReport.Warn($"Failed to patch Task.Yield: {ex.Message}");
         }
     }
 
@@ -3611,7 +3625,9 @@ public partial class RunSimulator
             _rewardWait = new ManualResetEventSlim(false);
 
             Console.Error.WriteLine($"[SIM] Card reward pending: {options.Count} cards (blocking)");
-            _rewardWait.Wait(TimeSpan.FromSeconds(300)); // Wait up to 5 min
+            // Wait for the player however long it takes (a person or a paused RL actor); a run
+            // reset releases it through SkipReward.
+            _rewardWait.Wait();
 
             var choice = _rewardChoice;
             var altChoice = _rewardAlternativeChoice;
@@ -3863,7 +3879,7 @@ public partial class RunSimulator
             if (getLocString != null && glsPrefix != null)
             {
                 try { harmony.Patch(getLocString, new HarmonyMethod(glsPrefix)); }
-                catch (Exception ex4) { Console.Error.WriteLine($"[WARN] Failed to patch GetLocString: {ex4.Message}"); }
+                catch (Exception ex4) { PatchReport.Warn($"Failed to patch GetLocString: {ex4.Message}"); }
             }
 
             // Patch FromChooseABundleScreen to use our card selector
@@ -3879,7 +3895,7 @@ public partial class RunSimulator
                     Console.Error.WriteLine("[INFO] Patched FromChooseABundleScreen");
                 }
             }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Bundle patch: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.Warn($"Bundle patch: {ex.Message}"); }
 
             // Replace the Crystal Sphere minigame screen with a crystal_sphere decision
             try
@@ -3894,7 +3910,7 @@ public partial class RunSimulator
                     Console.Error.WriteLine("[INFO] Patched NCrystalSphereScreen.ShowScreen");
                 }
             }
-            catch (Exception ex) { Console.Error.WriteLine($"[WARN] Crystal Sphere patch: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.Warn($"Crystal Sphere patch: {ex.Message}"); }
 
             // Patch HasEntry to always return true
             PatchMethod(harmony, typeof(LocTable), "HasEntry", nameof(LocPatches.HasEntryPrefix));
@@ -3926,7 +3942,7 @@ public partial class RunSimulator
             var method = type.GetMethod(methodName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
             PatchMethod(harmony, method, patchName);
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Failed to patch {type.Name}.{methodName}: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.Warn($"Failed to patch {type.Name}.{methodName}: {ex.Message}"); }
     }
 
     private static void PatchMethod(Harmony harmony, System.Reflection.MethodInfo? method, string patchName)
@@ -3937,7 +3953,7 @@ public partial class RunSimulator
             var prefix = typeof(LocPatches).GetMethod(patchName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
             if (prefix != null) harmony.Patch(method, new HarmonyMethod(prefix));
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[WARN] Failed to patch {method.Name}: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.Warn($"Failed to patch {method.Name}: {ex.Message}"); }
     }
 
     internal static class LocPatches

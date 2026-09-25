@@ -39,8 +39,14 @@ class Program
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "lib"));
     }
 
+    // The protocol channel: the process's real stdout. Console.Out is pointed at stderr so that
+    // anything else printing to stdout (e.g. Sentry's "GDExtension not loaded" notice) cannot
+    // corrupt the JSON-lines stream.
+    static readonly TextWriter Protocol = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = false };
+
     static void Main(string[] args)
     {
+        Console.SetOut(Console.Error);
         // Prevent unhandled exceptions from crashing the process
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
@@ -48,7 +54,7 @@ class Program
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
-            Console.Error.WriteLine($"[WARN] Unobserved task exception: {e.Exception}");
+            PatchReport.EngineWarning($"Unobserved task exception: {e.Exception?.GetBaseException().Message}");
             e.SetObserved();
         };
 
@@ -89,8 +95,15 @@ class Program
                 // against a fresh legal set (actions refresh it themselves).
                 var cmdName = cmd.TryGetProperty("cmd", out var cn) && cn.ValueKind == JsonValueKind.String ? cn.GetString() : null;
                 if (cmdName is not ("action" or "get_map")) sim.InvalidateLegal();
+                if (cmdName is "start_run" or "load_save") PatchReport.DrainEngineWarnings(); // belong to the old run
                 result = HandleCommand(sim, cmd);
                 sim.AttachLegalActions(result);
+                sim.TrimSaveCallLog();
+                if (cmdName is "start_run" or "load_save") PatchReport.RemoveMonoModTempFiles();
+                var warnings = PatchReport.DrainEngineWarnings();
+                if (warnings.Count > 0 && result != null) result["warnings"] = warnings;
+                if (cmdName is "start_run" or "load_save" && result != null && PatchReport.Warnings.Count > 0)
+                    result["patch_warnings"] = PatchReport.Warnings;
             }
             catch (JsonException ex)
             {
@@ -241,7 +254,7 @@ class Program
 
     static void WriteLine(Dictionary<string, object?> data)
     {
-        Console.Out.WriteLine(JsonSerializer.Serialize(data, JsonOpts));
-        Console.Out.Flush();
+        Protocol.WriteLine(JsonSerializer.Serialize(data, JsonOpts));
+        Protocol.Flush();
     }
 }

@@ -42,13 +42,14 @@ internal static class TestModePatches
             var method = AccessTools.DeclaredMethod(type, name);
             if (method == null || !PatchProcessor.GetOriginalInstructions(method).Any(IsTestModeRead))
             {
-                Console.Error.WriteLine($"[WARN] TestMode patch: no TestMode read in {type.Name}.{name}");
+                PatchReport.Warn($"TestMode patch: no TestMode read in {type.Name}.{name}");
                 continue;
             }
             harmony.Patch(method, transpiler: transpiler);
             patched++;
         }
         Console.Error.WriteLine($"[INFO] TestMode patches: {patched}/{Targets.Length} gameplay methods use real-game branches");
+        PatchReport.Expect("TestMode real-game branches", patched, Targets.Length);
     }
 
     private static bool IsTestModeRead(CodeInstruction i) =>

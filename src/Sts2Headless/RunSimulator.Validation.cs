@@ -8,6 +8,35 @@ namespace Sts2Headless;
 public partial class RunSimulator
 {
     private List<Dictionary<string, object?>>? _lastLegal;
+    private List<System.Collections.IList>? _saveCallLogs;
+
+    /// <summary>
+    /// TestMode saves go to an in-memory <c>MockGodotFileIo</c>, which records every call (with the
+    /// full save JSON) in its <c>Calls</c> list for tests to inspect. Nothing reads it headless, so
+    /// it grew by megabytes per run until the process ran out of memory. Cleared after each command.
+    /// </summary>
+    internal void TrimSaveCallLog()
+    {
+        if (_saveCallLogs == null)
+        {
+            _saveCallLogs = new();
+            try
+            {
+                var manager = MegaCrit.Sts2.Core.Saves.SaveManager.Instance;
+                foreach (var f in manager.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public))
+                    if (f.GetValue(manager) is MegaCrit.Sts2.Core.Saves.Test.MockGodotFileIo mock && !_saveCallLogs.Contains(mock.Calls))
+                        _saveCallLogs.Add(mock.Calls);
+            }
+            catch (Exception ex) { Log($"TrimSaveCallLog: {ex.Message}"); }
+            if (_saveCallLogs.Count == 0)
+            {
+                _saveCallLogs = null; // save manager not set up yet; look again next time
+                return;
+            }
+        }
+        foreach (var calls in _saveCallLogs)
+            lock (calls) calls.Clear();
+    }
     private string? _lastDecision;
 
     /// <summary>Remembers what the client was just shown. Called from AttachLegalActions.</summary>

@@ -53,6 +53,16 @@ curse, Toolbox, Abundance) have `min_select: 1`.
 `{"cmd": "get_state"}` returns the current decision point again without acting. Use it to
 re-sync after an `error` response.
 
+Diagnostics that can appear on any response:
+
+* `warnings`: engine failures since the last response that happened in background work (an
+  event option or reward effect that threw). The game state is whatever the engine left.
+* `patch_warnings` (on `start_run` / `load_save`): a headless patch failed or matched a different
+  number of sites than expected, usually after a game update. Results may diverge from the game.
+* `{"type": "error", "engine_stuck": true}`: the enemy turn did not finish. Reset the run.
+
+The protocol channel (stdout) carries only JSON lines; everything else goes to stderr.
+
 ## Manual flow state machine
 
 ```

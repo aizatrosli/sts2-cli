@@ -56,6 +56,7 @@ class Game:
         )
         # Drain both pipes on threads: an unread stderr pipe fills up and blocks the engine.
         self.stderr_lines = collections.deque(maxlen=2000)
+        self.stdout_noise = []  # non-JSON lines on the protocol channel (should stay empty)
         self._lines = queue.Queue()
         threading.Thread(target=self._pump, args=(self.proc.stdout, self._lines.put), daemon=True).start()
         threading.Thread(target=self._pump, args=(self.proc.stderr, self.stderr_lines.append), daemon=True).start()
@@ -79,6 +80,8 @@ class Game:
             line = line.strip()
             if line.startswith("{"):
                 return json.loads(line)
+            if line:
+                self.stdout_noise.append(line)
 
     def stderr_text(self):
         return "\n".join(l for l in self.stderr_lines if l is not None)

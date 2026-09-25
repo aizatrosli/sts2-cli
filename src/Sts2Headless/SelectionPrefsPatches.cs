@@ -41,6 +41,7 @@ internal static class SelectionPrefsPatches
             patched++;
         }
         Console.Error.WriteLine($"[INFO] Patched {patched} CardSelectCmd entry points (selection prefs)");
+        PatchReport.Expect("CardSelectCmd selection prefs", patched, 16);
     }
 
     private static void Prefix(MethodBase __originalMethod, object[] __args)
