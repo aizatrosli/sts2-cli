@@ -2,22 +2,22 @@ namespace Godot.NativeInterop;
 
 using Godot;
 
-public static partial class VariantUtils
+// Used by source-generated bridge code, which only the engine calls. Headless has no
+// native variants, so conversions produce defaults.
+public static class VariantUtils
 {
-    public static T ConvertTo<T>(Variant v) => default!;
-    public static Variant CreateFrom<T>(T value) => new Variant(value);
-    public static Variant CreateFromString(string s) => new Variant(s);
-    public static Variant CreateFromFloat(float f) => new Variant(f);
-    public static Variant CreateFromDouble(double d) => new Variant(d);
-    public static Variant CreateFromInt(int i) => new Variant(i);
-    public static Variant CreateFromBool(bool b) => new Variant(b);
-    public static Variant CreateFromStringName(StringName s) => new Variant(s);
+    public static T ConvertTo<[MustBeVariant] T>(in godot_variant variant) => default!;
+    public static godot_variant CreateFrom<[MustBeVariant] T>(in T from) => default;
 }
 
 // Low-level native interop types used in generated bridge code
 public struct godot_string_name { }
 public struct godot_variant { }
-public struct godot_bool { }
+public enum godot_bool : byte
+{
+    True = 1,
+    False = 0,
+}
 public struct NativeGodotVariant { }
 public struct NativeGodotString { }
 public struct NativeGodotStringName { }
