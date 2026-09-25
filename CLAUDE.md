@@ -59,5 +59,6 @@ Expected: `Completed: 5/5` for every character.
 - `card_select` decision uses key `cards` (not `options`) and action `select_cards` with comma-separated `indices`.
 - `AnyEnemy` cards/potions require `target_index` when ≥2 enemies are alive; with a single alive enemy the adapter auto-targets.
 - `get_state` re-exports the current decision without acting.
+- `start_run` rolls act 1 (Overgrowth/Underdocks) from the seed like the real lobby (`ActModel.GetRandomList` with the `act_selection` RNG); optional `act1` = `random|overgrowth|underdocks`. Repeated `start_run`/`load_save` in one process must go through `CleanUp()` + `ResetRunScopedState()`; engine singletons (card selector scope, CombatManager event handlers) are registered once per process.
 - The Crystal Sphere event's minigame screen is replaced by a `crystal_sphere` decision (`crystal_sphere_divine {x,y,tool}`) in both flows.
 - Manual flow adds decisions `rewards` and `treasure` and actions `claim_reward`, `proceed`, `open_chest`, `pick_relic`, `skip_relic`, `select_card_reward_alternative`. See `docs/transitions.md`.

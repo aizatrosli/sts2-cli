@@ -229,3 +229,48 @@ class TestShopAndCrystalSphere:
             x, y = next((x, y) for y, row in enumerate(state["grid"]) for x, v in enumerate(row) if v == "?")
             state = game.act("crystal_sphere_divine", x=x, y=y, tool="big")
         assert state["decision"] != "crystal_sphere"
+
+
+class TestActSelection:
+    """Act 1 is rolled from the seed like the single-player lobby (Overgrowth or Underdocks)."""
+
+    @pytest.mark.parametrize("act1,act_id", [("overgrowth", "OVERGROWTH"), ("underdocks", "UNDERDOCKS")])
+    def test_act1_override(self, game, act1, act_id):
+        state = game.start(seed="acts1", act1=act1)
+        assert state["type"] == "decision", state
+        assert state["context"]["act"] == 1
+        assert state["context"]["act_id"] == act_id
+
+    def test_unknown_act1_rejected(self, game):
+        state = game.start(seed="acts2", act1="hive")
+        assert state["type"] == "error"
+
+    def test_random_act1_depends_on_seed(self, game):
+        seen = set()
+        for i in range(12):
+            state = game.start(seed=f"actroll{i}")
+            assert state["type"] == "decision", state
+            seen.add(state["context"]["act_id"])
+        assert seen == {"OVERGROWTH", "UNDERDOCKS"}
+
+
+class TestRepeatedRuns:
+    """RL envs reset many times in one process; every start_run must begin a clean run."""
+
+    def test_same_seed_restarts_identically(self, game):
+        first = start_manual(game, "reset1")
+        game.start(seed="reset-other", flow="manual")
+        again = start_manual(game, "reset1")
+        assert again["choices"] == first["choices"]
+        assert again["context"] == first["context"]
+        assert again["player"] == first["player"]
+
+    def test_restart_mid_combat(self, game):
+        state = start_manual(game, "reset2")
+        state = game.act("select_map_node", col=state["choices"][0]["col"], row=state["choices"][0]["row"])
+        assert state["decision"] == "combat_play", state
+        state = start_manual(game, "reset3")
+        state = game.act("select_map_node", col=state["choices"][0]["col"], row=state["choices"][0]["row"])
+        assert state["decision"] == "combat_play", state
+        state = win_combat(game, state)
+        assert state["decision"] == "rewards", state

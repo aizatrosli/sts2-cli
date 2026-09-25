@@ -120,7 +120,8 @@ class Program
                     cmd.TryGetProperty("ascension", out var asc) ? asc.GetInt32() : 0,
                     cmd.TryGetProperty("seed", out var s) ? s.GetString() : null,
                     cmd.TryGetProperty("lang", out var lang) ? lang.GetString() ?? "en" : "en",
-                    cmd.TryGetProperty("flow", out var flow) ? flow.GetString() : null
+                    cmd.TryGetProperty("flow", out var flow) ? flow.GetString() : null,
+                    cmd.TryGetProperty("act1", out var act1) ? act1.GetString() : null
                 );
 
             case "action":

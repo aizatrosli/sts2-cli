@@ -12,6 +12,9 @@ The JSON protocol can run in two **flows**, chosen per run with the `flow` field
 {"cmd": "start_run", "character": "Silent", "seed": "abc", "ascension": 0, "flow": "manual"}
 ```
 
+`start_run` can be sent again at any time to start a fresh run in the same process (an RL
+`reset`); the previous run is torn down first.
+
 ## `legal_actions`
 
 In both flows every `"type": "decision"` response has a `legal_actions` list. Each entry is
@@ -80,7 +83,19 @@ re-sync after an `error` response.
   Other reward screens (chest extras, rest-site or event rewards) close by themselves once
   everything is claimed. Their `proceed` skips what is left and returns to the room.
 
-### Act transitions
+### Acts
+
+A run has three acts, as in single player:
+
+| act | `context.act_id` |
+|---|---|
+| 1 | `OVERGROWTH` or `UNDERDOCKS` |
+| 2 | `HIVE` |
+| 3 | `GLORY` |
+
+Act 1 is rolled from the seed with the lobby's own `act_selection` RNG, so a seed always gets
+the same act 1 it would get in the game. `start_run` takes `"act1": "random"` (default),
+`"overgrowth"` or `"underdocks"` to pin it, like the lobby's act 1 setting.
 
 After a boss, `proceed` on the rewards screen:
 

@@ -228,16 +228,23 @@ public partial class RunSimulator
     private int _goldBeforeCombat;
     private int _lastKnownHp;
     private readonly HeadlessCardSelector _cardSelector = new();
+    // The engine accepts one selector registration per process ("A card selector is already
+    // active"); keep the scope so a second start_run/load_save reuses it.
+    private IDisposable? _selectorScope;
     // Pending bundle selection (Scroll Boxes: pick 1 of N packs)
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
-    public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string lang = "en", string? flow = null)
+    public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string lang = "en", string? flow = null, string? act1 = null)
     {
         try
         {
             _loc.Lang = lang;
             if (!TrySetFlow(flow, out var flowError)) return Error(flowError);
+            // A new run in the same process (e.g. an RL env reset) must tear down the previous
+            // one first; RunManager.SetUpTest refuses to run twice ("State is already set").
+            if (_runState != null) CleanUp();
+            ResetRunScopedState();
             ResetManualFlowState();
             EnsureModelDbInitialized();
 
@@ -246,11 +253,14 @@ public partial class RunSimulator
                 return Error($"Unknown character: {character}");
 
             var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            Log($"Creating RunState with seed={seedStr}");
+            if (!TrySelectActs(seedStr, act1, out var acts, out var actError))
+                return Error(actError);
+            Log($"Creating RunState with seed={seedStr}, acts={string.Join(",", acts.Select(a => a.Id.Entry))}");
 
             // Use CreateForTest which properly handles mutable copies internally
             _runState = RunState.CreateForTest(
                 players: new[] { player },
+                acts: acts,
                 ascensionLevel: ascension,
                 seed: seedStr
             );
@@ -272,8 +282,7 @@ public partial class RunSimulator
             Log("Run launched");
 
             // Register event handlers for combat turn transitions
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+            SubscribeCombatEvents();
 
             // Finalize starting relics
             RunManager.Instance.FinalizeStartingRelics().GetAwaiter().GetResult();
@@ -284,7 +293,7 @@ public partial class RunSimulator
             Log("Entered Act 0");
 
             // Register card selector for cards that need player choice
-            CardSelectCmd.UseSelector(_cardSelector);
+            _selectorScope ??= CardSelectCmd.UseSelector(_cardSelector);
             LocPatches._bundleSimRef = this;
 
             // Now we should be at the map — detect decision point
@@ -293,6 +302,34 @@ public partial class RunSimulator
         catch (Exception ex)
         {
             return ErrorWithTrace("StartRun failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Choose the run's acts like the game's StartRunLobby.BeginRunLocally: each act slot is rolled
+    /// from the seed (Rng "act_selection") among its unlocked acts (e.g. act 1 is Overgrowth or
+    /// Underdocks), and the lobby's act-1 selector can pin act 1. Without this, CreateForTest falls
+    /// back to ActModel.GetDefaultList() and act 1 is always Overgrowth.
+    /// </summary>
+    private static bool TrySelectActs(string seed, string? act1, out List<ActModel> acts, out string error)
+    {
+        error = "";
+        var rng = new MegaCrit.Sts2.Core.Random.Rng(StringHelper.GetDeterministicHashCode(seed), "act_selection");
+        acts = ActModel.GetRandomList(rng, UnlockState.all, isMultiplayer: false).ToList();
+        switch ((act1 ?? "random").Trim().ToLowerInvariant())
+        {
+            case "random":
+            case "":
+                return true;
+            case "overgrowth":
+                acts[0] = ModelDb.Act<MegaCrit.Sts2.Core.Models.Acts.Overgrowth>();
+                return true;
+            case "underdocks":
+                acts[0] = ModelDb.Act<MegaCrit.Sts2.Core.Models.Acts.Underdocks>();
+                return true;
+            default:
+                error = $"Unknown act1 '{act1}' (expected random, overgrowth or underdocks)";
+                return false;
         }
     }
 
@@ -502,6 +539,8 @@ public partial class RunSimulator
         {
             _loc.Lang = lang;
             if (!TrySetFlow(flow, out var flowError)) return Error(flowError);
+            if (_runState != null) CleanUp();
+            ResetRunScopedState();
             ResetManualFlowState();
             EnsureModelDbInitialized();
 
@@ -527,9 +566,8 @@ public partial class RunSimulator
             RunManager.Instance.SetUpSavedSingleplayer(_runState, save).GetAwaiter().GetResult();
             LocalContext.NetId = netService.NetId;
 
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
-            CardSelectCmd.UseSelector(_cardSelector);
+            SubscribeCombatEvents();
+            _selectorScope ??= CardSelectCmd.UseSelector(_cardSelector);
             LocPatches._bundleSimRef = this;
 
             var savedRoom = _runState.CurrentRoom;
@@ -2222,6 +2260,7 @@ public partial class RunSimulator
             ["choices"] = choices,
             ["player"] = PlayerSummary(_runState!.Players[0]),
             ["act"] = _runState.CurrentActIndex + 1,
+            ["act_id"] = _runState.Act?.Id.Entry,
             ["act_name"] = _loc.Act(_runState.Act?.Id.Entry ?? "OVERGROWTH"),
             ["floor"] = _runState.ActFloor,
         };
@@ -3209,6 +3248,7 @@ public partial class RunSimulator
         var ctx = new Dictionary<string, object?>
         {
             ["act"] = _runState.CurrentActIndex + 1,
+            ["act_id"] = _runState.Act?.Id.Entry,
             ["act_name"] = _loc.Act(_runState.Act?.Id.Entry ?? "OVERGROWTH"),
             ["floor"] = _runState.ActFloor,
             ["room_type"] = _runState.CurrentRoom?.RoomType.ToString(),
@@ -4161,6 +4201,32 @@ public partial class RunSimulator
                 ["row"] = (int)currentCoord.Value.row,
             } : null,
         };
+    }
+
+    /// <summary>Forget adapter state from a previous run and release any thread parked on a prompt.</summary>
+    private bool _combatEventsSubscribed;
+
+    /// <summary>CombatManager outlives runs; subscribe once so repeated start_run/load_save don't stack handlers.</summary>
+    private void SubscribeCombatEvents()
+    {
+        if (_combatEventsSubscribed) return;
+        _combatEventsSubscribed = true;
+        CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+        CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+    }
+
+    private void ResetRunScopedState()
+    {
+        _cardSelector.CancelPending();
+        _cardSelector.SkipReward();
+        _pendingBundleTcs?.TrySetResult(Array.Empty<CardModel>());
+        _pendingBundles = null;
+        _pendingBundleTcs = null;
+        _pendingCardReward = null;
+        _pendingRewards = null;
+        _rewardsProcessed = false;
+        _eventOptionChosen = false;
+        _lastEventOptionCount = 0;
     }
 
     public void CleanUp()

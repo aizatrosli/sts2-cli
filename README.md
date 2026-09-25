@@ -89,6 +89,8 @@ Every decision includes `legal_actions`, a list of ready-to-send action bodies f
 {"cmd": "action", "action": "proceed"}
 ```
 
+A run has three acts, as in single player. Act 1 is Overgrowth or Underdocks, rolled from the seed the way the game's lobby does; pass `"act1": "overgrowth"` or `"act1": "underdocks"` to pin it. Act 2 is the Hive and act 3 is Glory. `context.act_id` names the current act.
+
 `python/sts2_env.py` wraps this in a Gym-style `reset()` / `step()` API. See [docs/transitions.md](docs/transitions.md) for the full state machine.
 
 ## Game Logs
@@ -218,6 +220,8 @@ dotnet run --project src/Sts2Headless/Sts2Headless.csproj
 ### 强化学习 / 还原界面流程模式
 
 每个 decision 都带有 `legal_actions`（可直接发送的合法动作列表，便于做动作掩码）。在 `start_run` 中传入 `"flow": "manual"`，即可把游戏界面中的所有画面切换变成显式决策：奖励界面（`claim_reward` / `proceed`）、宝箱（`open_chest` / `pick_relic` / `skip_relic`）、休息处/事件/商店后的“继续”、以及击败 Boss 后进入下一幕。`{"cmd": "get_state"}` 可重新读取当前决策。`python/sts2_env.py` 提供 Gym 风格的 `reset()` / `step()` 封装，完整状态机见 [docs/transitions.md](docs/transitions.md)。
+
+与单人模式相同，一局共三幕。第一幕由种子决定为密林或暗港（与游戏大厅的随机方式一致），可在 `start_run` 中传入 `"act1": "overgrowth"` 或 `"act1": "underdocks"` 固定；第二幕为巢穴，第三幕为荣耀。`context.act_id` 表示当前所在幕。
 
 ## 游戏日志
 
