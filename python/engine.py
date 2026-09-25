@@ -37,10 +37,10 @@ def built_engine_dll():
     return max(dlls, key=os.path.getmtime) if dlls else None
 
 
-def engine_command(dotnet=None):
-    """Start the built dll directly: about 0.5 s faster per process than `dotnet run`."""
+def engine_command(dotnet=None, debug=False):
+    """Start the built dll directly: about 0.5 s faster per process than `dotnet run`.
+    `debug` enables the debug commands (set_player, enter_room, set_draw_order)."""
     dotnet = dotnet or find_dotnet()
     dll = built_engine_dll()
-    if dll:
-        return [dotnet, dll]
-    return [dotnet, "run", "--no-build", "--project", PROJECT]
+    cmd = [dotnet, dll] if dll else [dotnet, "run", "--no-build", "--project", PROJECT, "--"]
+    return cmd + (["--debug"] if debug else [])

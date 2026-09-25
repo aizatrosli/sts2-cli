@@ -203,6 +203,42 @@ class TestGameRules:
         state = game.send({"cmd": "get_state"})
         assert {"use_potion", "discard_potion"} <= legal_names(state)
 
+    def test_foul_potion_at_shop_gives_gold(self, game):
+        to_map(game)
+        game.set_player(potions=["FOUL_POTION"])
+        state = game.enter_room("shop")
+        assert {"action": "use_potion", "args": {"potion_index": 0}} in legal(state)
+        gold = state["player"]["gold"]
+        state = game.act("use_potion", potion_index=0)
+        assert state["decision"] == "shop" and state["player"]["gold"] > gold
+        assert not state["player"]["potions"]
+
+    def test_fake_merchant_shop(self, game):
+        to_map(game)
+        game.set_player(gold=300)
+        state = game.enter_room("event", event="FAKE_MERCHANT")
+        assert state["decision"] == "fake_merchant" and len(state["relics"]) == 6
+        relic = state["relics"][0]
+        state = game.act("buy_relic", relic_index=0)
+        assert state["decision"] == "fake_merchant"
+        assert state["player"]["gold"] == 300 - relic["cost"]
+        assert relic["id"] in {r["id"] for r in state["player"]["relics"]}
+        assert not state["relics"][0]["is_stocked"]
+        assert {"action": "buy_relic", "args": {"relic_index": 0}} not in legal(state)
+        assert game.act("proceed")["decision"] == "map_select"
+
+    def test_fake_merchant_foul_potion_fight(self, game):
+        to_map(game)
+        game.set_player(gold=300, hp=9999, max_hp=9999, potions=["FOUL_POTION"])
+        state = game.enter_room("event", event="FAKE_MERCHANT")
+        state = game.act("buy_relic", relic_index=0)
+        state = game.act("use_potion", potion_index=0)
+        assert state["decision"] == "combat_play"
+        state = fight(game, state)
+        assert state["decision"] == "rewards", state.get("decision")
+        relic_rewards = [r for r in state["rewards"] if r.get("type") == "relic"]
+        assert len(relic_rewards) == 1 + 5  # the Rug plus every relic still on sale
+
     def test_jungle_maze_join_forces(self, game):
         to_map(game)
         gold = game.send({"cmd": "get_state"})["player"]["gold"]

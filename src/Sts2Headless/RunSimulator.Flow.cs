@@ -237,53 +237,7 @@ public partial class RunSimulator
         if (!ReferenceEquals(TopRewardsScreen, screen))
             return DetectDecisionPoint();
 
-        var rewards = screen.VisibleRewards.Select((r, i) =>
-        {
-            var info = new Dictionary<string, object?> { ["index"] = i };
-            switch (r)
-            {
-                case GoldReward g:
-                    info["type"] = "gold";
-                    info["amount"] = g.Amount;
-                    break;
-                case PotionReward p:
-                    info["type"] = "potion";
-                    if (p.Potion != null)
-                    {
-                        info["name"] = _loc.Potion(p.Potion.Id.Entry);
-                        info["description"] = _loc.Text("potions", p.Potion.Id.Entry + ".description");
-                    }
-                    info["enabled"] = player.HasOpenPotionSlots;
-                    break;
-                case RelicReward rr:
-                    info["type"] = "relic";
-                    if (rr.Relic != null)
-                    {
-                        info["name"] = _loc.Relic(rr.Relic.Id.Entry);
-                        info["description"] = _loc.Text("relics", rr.Relic.Id.Entry + ".description");
-                    }
-                    break;
-                case CardReward:
-                    // The UI only reveals the cards after the reward is clicked.
-                    info["type"] = "card";
-                    break;
-                case SpecialCardReward:
-                    info["type"] = "special_card";
-                    break;
-                case CardRemovalReward:
-                    info["type"] = "card_removal";
-                    break;
-                case LinkedRewardSet linked:
-                    info["type"] = "linked";
-                    info["count"] = linked.Rewards.Count;
-                    break;
-                default:
-                    info["type"] = r.GetType().Name;
-                    break;
-            }
-            info.TryAdd("enabled", true);
-            return info;
-        }).ToList();
+        var rewards = screen.VisibleRewards.Select((r, i) => RewardInfo(player, r, i)).ToList();
 
         return new Dictionary<string, object?>
         {
@@ -294,6 +248,58 @@ public partial class RunSimulator
             ["is_terminal"] = screen.IsTerminal,
             ["player"] = PlayerSummary(player),
         };
+    }
+
+    private static readonly System.Reflection.FieldInfo? SpecialCardField =
+        typeof(SpecialCardReward).GetField("_card", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+    private Dictionary<string, object?> RewardInfo(Player player, Reward r, int index)
+    {
+        var info = new Dictionary<string, object?> { ["index"] = index };
+        switch (r)
+        {
+            case GoldReward g:
+                info["type"] = "gold";
+                info["amount"] = g.Amount;
+                break;
+            case PotionReward p:
+                if (p.Potion != null)
+                    foreach (var (k, v) in PotionInfo(p.Potion)) info[k] = v;
+                info["type"] = "potion";
+                info["enabled"] = player.HasOpenPotionSlots;
+                break;
+            case RelicReward rr:
+                if (rr.Relic != null)
+                    foreach (var (k, v) in RelicInfo(rr.Relic)) info[k] = v;
+                info["type"] = "relic";
+                break;
+            case CardReward:
+                // The UI only reveals the cards after the reward is clicked.
+                info["type"] = "card";
+                break;
+            case SpecialCardReward:
+                // Unlike a card reward, the UI names this card up front (Swipe's stolen card...).
+                info["type"] = "special_card";
+                if (SpecialCardField?.GetValue(r) is MegaCrit.Sts2.Core.Models.CardModel card)
+                    info["card"] = CardInfo(card, MegaCrit.Sts2.Core.Entities.Cards.PileType.None);
+                break;
+            case CardRemovalReward:
+                info["type"] = "card_removal";
+                break;
+            case LinkedRewardSet linked:
+                // Claiming one of these gives up the others.
+                info["type"] = "linked";
+                info["count"] = linked.Rewards.Count;
+                info["rewards"] = linked.Rewards.Select((child, j) => RewardInfo(player, child, j)).ToList();
+                break;
+            default:
+                info["type"] = r.GetType().Name;
+                break;
+        }
+        var text = Rendered(() => r.Description.GetFormattedText(), "gameplay_ui", r.GetType().Name);
+        if (!string.IsNullOrWhiteSpace(text) && text != r.GetType().Name) info["reward_text"] = text;
+        info.TryAdd("enabled", true);
+        return info;
     }
 
     // ─── Combat end ───
@@ -505,13 +511,7 @@ public partial class RunSimulator
     {
         SettleRestSiteTask();
         var options = restRoom.Options;
-        var optionList = options.Select((opt, i) => new Dictionary<string, object?>
-        {
-            ["index"] = i,
-            ["option_id"] = opt.OptionId,
-            ["name"] = opt.GetType().Name,
-            ["is_enabled"] = opt.IsEnabled,
-        }).ToList();
+        var optionList = options.Select(RestOptionInfo).ToList();
 
         return new Dictionary<string, object?>
         {
@@ -538,7 +538,7 @@ public partial class RunSimulator
         string? description = null;
         if (ev?.Description != null)
         {
-            var d = _loc.Text(ev.Description.LocTable, ev.Description.LocEntryKey);
+            var d = EventBodyText(ev);
             if (d != ev.Description.LocEntryKey) description = d;
         }
 
@@ -583,11 +583,10 @@ public partial class RunSimulator
         if (awaitingPick)
         {
             relics = RunManager.Instance.TreasureRoomRelicSynchronizer.CurrentRelics!.Select((r, i) =>
-                new Dictionary<string, object?>
                 {
-                    ["index"] = i,
-                    ["name"] = _loc.Relic(r.Id.Entry),
-                    ["description"] = _loc.Text("relics", r.Id.Entry + ".description"),
+                    var info = RelicInfo(r);
+                    info["index"] = i;
+                    return info;
                 }).ToList();
         }
 

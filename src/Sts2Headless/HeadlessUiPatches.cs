@@ -3,13 +3,17 @@ using System.Reflection.Emit;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Audio.Debug;
 using MegaCrit.Sts2.Core.Context;
+using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Models.Monsters;
+using MegaCrit.Sts2.Core.Models.Potions;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Audio;
 using MegaCrit.Sts2.Core.Nodes.Vfx.Utilities;
+using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2Headless;
@@ -31,6 +35,11 @@ namespace Sts2Headless;
 ///   <c>NAudioManager.Instance.PlayOneShot</c>; made null-safe like the screen shakes.
 /// * Trial's "Double Down" opens the abandon-run confirmation popup; confirming it abandons the run.
 ///   Headless it calls <c>RunManager.Abandon()</c> directly, which ends the run in defeat.
+/// * Foul Potion outside combat is thrown at a merchant. Its usability check asks the UI for the
+///   merchant button (null headless), so it was never usable; at the Fake Merchant its use also
+///   needs the event's <c>NFakeMerchant</c> node to start the fight. Headless it is usable in a
+///   shop and at a Fake Merchant that has not been attacked yet, and the throw calls the event's
+///   own <c>FoulPotionThrown</c> (fight with the merchant, his relics as rewards).
 /// </summary>
 internal static class HeadlessUiPatches
 {
@@ -62,6 +71,31 @@ internal static class HeadlessUiPatches
         if (entry is MerchantCardRemovalEntry removal) removal.SetUsed();
     }
 
+    /// <summary>The local player's Fake Merchant while its shop is open (not yet attacked).</summary>
+    internal static FakeMerchant? ActiveFakeMerchant(Player? player)
+    {
+        if (player?.RunState?.CurrentRoom is not EventRoom room || room.CanonicalEvent is not FakeMerchant)
+            return null;
+        return RunManager.Instance.EventSynchronizer?.GetEventForPlayer(player) is FakeMerchant fm
+               && fm.Inventory != null && !fm.StartedFight ? fm : null;
+    }
+
+    public static void FoulPotionUsablePostfix(FoulPotion __instance, ref bool __result)
+    {
+        if (__result || CombatManager.Instance.IsInProgress) return;
+        __result = __instance.Owner?.RunState?.CurrentRoom is MerchantRoom || ActiveFakeMerchant(__instance.Owner) != null;
+    }
+
+    public static bool FoulPotionOnUsePrefix(FoulPotion __instance, ref Task __result)
+    {
+        if (CombatManager.Instance.IsInProgress || ActiveFakeMerchant(__instance.Owner) is not { } fm || fm.Node != null)
+            return true;
+        var players = __instance.Owner.RunState.Players;
+        __result = Task.WhenAll(players.Select(p =>
+            ((FakeMerchant)RunManager.Instance.EventSynchronizer.GetEventForPlayer(p)).FoulPotionThrown(__instance)));
+        return false;
+    }
+
     public static void Apply()
     {
         var harmony = new Harmony("sts2headless.ui");
@@ -84,10 +118,22 @@ internal static class HeadlessUiPatches
         catch (Exception ex) { PatchReport.Warn($"Trial.DoubleDown patch failed: {ex.Message}"); }
         harmony.Patch(AccessTools.Method(typeof(MerchantEntry), nameof(MerchantEntry.InvokePurchaseCompleted)),
             postfix: new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(PurchaseCompletedPostfix))));
+        int foul = 0;
+        try
+        {
+            harmony.Patch(AccessTools.PropertyGetter(typeof(FoulPotion), nameof(FoulPotion.PassesCustomUsabilityCheck)),
+                postfix: new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(FoulPotionUsablePostfix))));
+            foul++;
+            harmony.Patch(AccessTools.Method(typeof(FoulPotion), "OnUse"),
+                new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(FoulPotionOnUsePrefix))));
+            foul++;
+        }
+        catch (Exception ex) { PatchReport.Warn($"FoulPotion patch failed: {ex.Message}"); }
         Console.Error.WriteLine($"[INFO] Headless UI patches: {nullSafe} null-safe call sites, {trial} Trial methods, {rest} DenseVegetation methods");
         PatchReport.Expect("Headless UI null-safe call sites", nullSafe, 11);
         PatchReport.Expect("Headless UI Trial methods", trial, 3);
         PatchReport.Expect("Headless UI DenseVegetation methods", rest, 1);
+        PatchReport.Expect("Headless UI Foul Potion methods", foul, 2);
     }
 
     // ─── transpilers ───

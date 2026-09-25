@@ -30,7 +30,7 @@ class Game:
         env["STS2_GAME_DIR"] = os.path.join(ROOT, "lib")
         self.timeout = timeout
         self.proc = subprocess.Popen(
-            engine_command(DOTNET), cwd=ROOT,
+            engine_command(DOTNET, debug=True), cwd=ROOT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
         )

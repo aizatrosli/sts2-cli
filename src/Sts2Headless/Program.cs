@@ -44,8 +44,19 @@ class Program
     // corrupt the JSON-lines stream.
     static readonly TextWriter Protocol = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = false };
 
+    /// <summary>Protocol schema version, reported in the ready message.</summary>
+    const int SchemaVersion = 2;
+
+    /// <summary>
+    /// Debug commands (set_player, enter_room, set_draw_order) edit the game state. They share the
+    /// channel an agent acts on, so they are only accepted when the engine is started with --debug
+    /// (or STS2_DEBUG_COMMANDS=1): an RL agent cannot reach them by accident.
+    /// </summary>
+    static bool DebugCommands;
+
     static void Main(string[] args)
     {
+        DebugCommands = args.Contains("--debug") || Environment.GetEnvironmentVariable("STS2_DEBUG_COMMANDS") == "1";
         Console.SetOut(Console.Error);
         // Prevent unhandled exceptions from crashing the process
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -79,7 +90,13 @@ class Program
         };
 
         var sim = new RunSimulator();
-        WriteLine(new Dictionary<string, object?> { ["type"] = "ready", ["version"] = "0.2.0" });
+        WriteLine(new Dictionary<string, object?>
+        {
+            ["type"] = "ready",
+            ["version"] = "0.2.0",
+            ["schema_version"] = SchemaVersion,
+            ["debug_commands"] = DebugCommands,
+        });
 
         string? line;
         while ((line = Console.ReadLine()) != null)
@@ -129,6 +146,12 @@ class Program
     static Dictionary<string, object?>? HandleCommand(RunSimulator sim, JsonElement cmd)
     {
         var cmdType = cmd.GetProperty("cmd").GetString() ?? "";
+        if (cmdType is "set_player" or "enter_room" or "set_draw_order" && !DebugCommands)
+            return new Dictionary<string, object?>
+            {
+                ["type"] = "error",
+                ["message"] = $"'{cmdType}' is a debug command; start the engine with --debug (or STS2_DEBUG_COMMANDS=1)",
+            };
         switch (cmdType)
         {
             case "start_run":

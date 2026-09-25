@@ -257,7 +257,7 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
                 else:
                     state = send({"cmd": "action", "action": "skip_select"})
 
-            elif decision == "shop":
+            elif decision in ("shop", "fake_merchant"):
                 state = send({"cmd": "action", "action": "leave_room"})
 
             elif decision == "crystal_sphere":

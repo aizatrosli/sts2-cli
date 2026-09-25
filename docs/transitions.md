@@ -94,6 +94,7 @@ The protocol channel (stdout) carries only JSON lines; everything else goes to s
 | `event_choice` | event / Ancient dialogue | `choose_option {option_index}`. A finished event shows one option `{"index": 0, "is_proceed": true}`. |
 | `rest_site` | campfire | `choose_option {option_index}`; `proceed` once `can_proceed` is true (after a successful choice). Options stay available when a relic allows more than one. |
 | `shop` | merchant | `buy_card`, `buy_relic`, `buy_potion`, `remove_card`, `proceed` |
+| `fake_merchant` | The Merchant??? event (both flows): a shop of six fake relics | `buy_relic {relic_index}`, `proceed` (`leave_room` in auto flow), and `use_potion` on a Foul Potion, which attacks him: a fight whose rewards are his rug and every relic still on sale |
 | `treasure` | treasure room | `open_chest`, then `pick_relic {relic_index}` / `skip_relic`, then `proceed` (`proceed` while the relic is on offer skips it) |
 | `crystal_sphere` | Crystal Sphere event minigame (both flows) | `crystal_sphere_divine {x, y, tool}` with `tool` `big` (3×3) or `small` (1 cell), on a hidden cell. `grid[y][x]` is `"?"` for hidden, `""` for cleared, or the revealed item type (`relic`, `potion`, `card_reward`, `curse`, `gold`). Uncovered items are granted as a rewards screen once `divinations_left` reaches 0. |
 | `game_over` | death / victory | none |
@@ -103,6 +104,38 @@ The protocol channel (stdout) carries only JSON lines; everything else goes to s
 Outside combat (map, events, rest sites, shops, treasure, rewards) the top-bar potion popup is
 available as `use_potion {potion_index}` for potions that can be drunk anytime (Fruit Juice,
 Blood Potion, Foul Potion at a merchant...) and `discard_potion {potion_index}` for any potion.
+
+### Observation fields (`schema_version` 2)
+
+The `ready` message carries `schema_version` and `debug_commands`. Text is rendered by the
+engine's own formatter, as the UI shows it: variables filled in, BBCode stripped, energy and
+star icons written `[E]` and `[star]`.
+
+* **Cards** (hand, piles, deck, rewards, selections, shop): `id` (e.g. `CARD.DEFEND_DEFECT`),
+  `name` (`+` when upgraded), `cost` (current energy cost), `base_cost`, `costs_x`,
+  `unplayable`, `type`, `rarity`, `upgraded`, `upgrade_level`, `description` (as rendered for
+  the card's pile, so combat modifiers show), `stats`, `keywords`, `enchantment(_amount)`,
+  `affliction(_amount)`. Upgrade screens add `after_upgrade`.
+* **Relics** `id, name, description, counter, used_up, vars`; **potions** `id, name,
+  description, usage, target_type, vars`; **powers** `id, name, description, amount, type`.
+* **Combat**: `draw_pile` (sorted, so draw order stays hidden), `discard_pile`,
+  `exhaust_pile` and their `*_count`, `orb_slots`; enemies have `id` and a combat-stable
+  `slot`; intents have `label`, `description` and `card_count` (status cards they add);
+  damage previews come from the engine's calculated hits, with `hits_known: false` when the
+  hit count is conditional.
+* **`card_select`**: `prompt`, `source` (the `CardSelectCmd` entry point, e.g.
+  `DeckForUpgrade`), `cancelable` (Smith, Cook, shop removal: `skip_select` backs out), and a
+  `combat` block when the selection opens during a fight.
+* **Events**: each option has the rendered `title`/`description`, its `vars` and `offers`
+  (the cards, relics or potions its hover tips show). Rest options have `name`/`description`.
+* **Rewards**: `special_card` rewards carry their `card`, `linked` rewards their children,
+  every reward its `reward_text`. Shop rows have `price` (gold); shop cards keep `cost` as the
+  gold price for compatibility and give the energy cost as `card_cost`.
+* **`context`**: `act`, `act_id`, `act_name`, `floor`, `total_floor`, `room_type`, `seed`,
+  `ascension`, `flow`, `boss` and `second_boss`. `map_select` embeds the full `map`.
+
+Debug commands (`set_player`, `enter_room`, `set_draw_order`) are accepted only when the engine
+starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.
 
 ### Rewards screen details
 

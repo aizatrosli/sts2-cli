@@ -138,6 +138,14 @@ public partial class RunSimulator
                 AddOutOfCombatPotionActions(player, legal);
                 break;
 
+            case "fake_merchant":
+                foreach (var r in Rows(result, "relics"))
+                    if (Flag(r, "is_stocked") && r.GetValueOrDefault("cost") is int cost && cost <= player.Gold)
+                        legal.Add(Act("buy_relic", new() { ["relic_index"] = r["index"] }));
+                AddOutOfCombatPotionActions(player, legal);
+                legal.Add(Act(_manualFlow ? "proceed" : "leave_room"));
+                break;
+
             case "treasure":
                 if (!Flag(result, "chest_opened"))
                 {

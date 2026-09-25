@@ -94,7 +94,7 @@ def fight(d=None):
     if d is None: d = action("end_turn")
     for _ in range(200):
         dec = d.get("decision", d.get("type", ""))
-        if dec in ("card_reward", "game_over", "map_select", "rest_site", "shop", "event_choice", "bundle_select"):
+        if dec in ("card_reward", "game_over", "map_select", "rest_site", "shop", "fake_merchant", "event_choice", "bundle_select"):
             return d
         if dec == "card_select":
             n = d.get("min_select", 1)

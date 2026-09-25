@@ -59,7 +59,9 @@ def default_reward(prev_obs, obs):
 
 class Sts2Env:
     def __init__(self, flow="manual", timeout=30.0, max_steps=5000,
-                 reward_fn=default_reward, verbose=False):
+                 reward_fn=default_reward, verbose=False, debug=False):
+        # debug=True enables the engine's debug commands (set_player etc.), e.g. for god mode.
+        self.debug = debug
         self.flow = flow
         self.timeout = timeout
         self.max_steps = max_steps
@@ -76,7 +78,7 @@ class Sts2Env:
         if self._proc is not None and self._proc.poll() is None:
             return
         self._proc = subprocess.Popen(
-            engine_command(), cwd=REPO_ROOT,
+            engine_command(debug=self.debug), cwd=REPO_ROOT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=None if self.verbose else subprocess.DEVNULL,
             text=True, bufsize=1,
@@ -239,7 +241,7 @@ def main():
     completed = 0
     seen = {}
     for i in range(args.num_runs):
-        env = Sts2Env(flow=args.flow, verbose=args.verbose)
+        env = Sts2Env(flow=args.flow, verbose=args.verbose, debug=args.god)
         seed = f"{args.seed_prefix}_{i + 1}"
         try:
             r = play_random(env, args.character, seed, args.ascension, args.god, args.verbose)

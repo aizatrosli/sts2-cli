@@ -14,7 +14,7 @@ namespace Sts2Headless;
 /// </summary>
 internal static class SelectionPrefsPatches
 {
-    internal sealed record Info(string Source, bool Cancelable, bool? CanSkip, string? PromptKey);
+    internal sealed record Info(string Source, bool Cancelable, bool? CanSkip, string? Prompt);
 
     private static Info? _next;
 
@@ -55,13 +55,16 @@ internal static class SelectionPrefsPatches
             if (__args[i] is CardSelectorPrefs prefs)
             {
                 cancelable = prefs.Cancelable;
-                prompt = prefs.Prompt?.LocEntryKey;
+                // Formatted now: the prompt carries its own variables (Amount, MinCount, MaxCount).
+                try { prompt = RunSimulator.CleanText(prefs.Prompt?.GetFormattedText()); }
+                catch { prompt = prefs.Prompt?.LocEntryKey; }
             }
             else if (parameters[i].Name == "canSkip" && __args[i] is bool b)
             {
                 canSkip = b;
             }
         }
-        _next = new Info(__originalMethod.Name, cancelable, canSkip, prompt);
+        var source = __originalMethod.Name.StartsWith("From", StringComparison.Ordinal) ? __originalMethod.Name[4..] : __originalMethod.Name;
+        _next = new Info(source, cancelable, canSkip, string.IsNullOrWhiteSpace(prompt) ? null : prompt);
     }
 }

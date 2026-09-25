@@ -376,6 +376,9 @@ def play_game():
         elif dec == "shop":
             d = handle_shop(d)
 
+        elif dec == "fake_merchant":
+            d = action("leave_room")
+
         elif dec == "card_select":
             # Generic card select - pick index 0
             cards = d.get("cards", [])

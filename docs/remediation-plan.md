@@ -216,6 +216,12 @@ where a field is renamed.
 12. **Debug commands** — accepted only when the engine starts with `--debug` (or an env
     var); `sts2_env --god` passes it.
 
+Result: all items landed except `description_raw` (templates are available from the loc
+tables; not needed so far) and per-response `schema_version` (sent once, in `ready`). Rendering
+real text costs throughput: ~245 → ~175–180 steps/s even with a render cache keyed on every
+renderer input. A compact observation mode (ids and numbers, no text) is the follow-up if
+throughput matters more than readable text.
+
 ## Phase 6 — RL wrapper (`python/sts2_env.py`)
 
 - Default seed: random when omitted; echo `seed`, `ascension`, `act1`, `flow` in the

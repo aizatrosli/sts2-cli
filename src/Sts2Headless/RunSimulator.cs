@@ -1381,13 +1381,16 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> DoBuyRelic(Player player, Dictionary<string, object?>? args)
     {
-        if (_runState?.CurrentRoom is not MerchantRoom merchantRoom)
+        var inv = _runState?.CurrentRoom is MerchantRoom merchantRoom
+            ? merchantRoom.GetLocalInventory()
+            : HeadlessUiPatches.ActiveFakeMerchant(player)?.Inventory;
+        if (inv == null)
             return Error("Not in a shop");
         if (args == null || !args.ContainsKey("relic_index"))
             return Error("buy_relic requires 'relic_index'");
 
         var idx = Convert.ToInt32(args["relic_index"]);
-        var entries = merchantRoom.GetLocalInventory().RelicEntries;
+        var entries = inv.RelicEntries;
         if (idx < 0 || idx >= entries.Count) return Error($"Invalid relic index {idx}");
 
         var entry = entries[idx];
@@ -1400,7 +1403,6 @@ public partial class RunSimulator
             // Adroit, #80). Run the purchase on a background task and yield as soon as a
             // pending selection appears so the caller can resolve it; the background task
             // continues once the selector's TCS is fed by select_cards.
-            var inv = merchantRoom.GetLocalInventory();
             // entry.Model is cleared once the purchase completes; capture it for logging.
             var relicName = entry.Model?.GetType().Name ?? "?";
             var cost = entry.Cost;
@@ -1963,22 +1965,7 @@ public partial class RunSimulator
             var bundles = _pendingBundles.Select((bundle, i) => new Dictionary<string, object?>
             {
                 ["index"] = i,
-                ["cards"] = bundle.Select(card =>
-                {
-                    var stats = new Dictionary<string, object?>();
-                    try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                    var bkws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                    return new Dictionary<string, object?>
-                    {
-                        ["name"] = _loc.Card(card.Id.Entry),
-                        ["cost"] = card.EnergyCost?.GetResolved() ?? 0,
-                        ["type"] = card.Type.ToString(),
-                        ["rarity"] = card.Rarity.ToString(),
-                        ["description"] = _loc.Text("cards", card.Id.Entry + ".description"),
-                        ["stats"] = stats.Count > 0 ? stats : null,
-                        ["keywords"] = bkws?.Count > 0 ? bkws : null,
-                    };
-                }).ToList(),
+                ["cards"] = bundle.Select(card => CardInfo(card, PileType.None, upgradePreview: false)).ToList(),
             }).ToList();
 
             return new Dictionary<string, object?>
@@ -2001,22 +1988,9 @@ public partial class RunSimulator
             var rewardCards = _cardSelector.PendingRewardCards!;
             var cards = rewardCards.Select((cr, i) =>
             {
-                var stats = new Dictionary<string, object?>();
-                try { foreach (var dv in cr.Card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var rrkws = cr.Card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["id"] = cr.Card.Id.ToString(),
-                    ["name"] = _loc.Card(cr.Card.Id.Entry),
-                    ["cost"] = cr.Card.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = cr.Card.Type.ToString(),
-                    ["rarity"] = cr.Card.Rarity.ToString(),
-                    ["description"] = _loc.Text("cards", cr.Card.Id.Entry + ".description"),
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["keywords"] = rrkws?.Count > 0 ? rrkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(cr.Card),
-                };
+                var info = CardInfo(cr.Card, PileType.None);
+                info["index"] = i;
+                return info;
             }).ToList();
 
             var alternatives = (_cardSelector.PendingRewardAlternatives ?? new List<CardRewardAlternative>())
@@ -2047,23 +2021,9 @@ public partial class RunSimulator
         {
             var opts = _cardSelector.PendingOptions.Select((card, i) =>
             {
-                var stats = new Dictionary<string, object?>();
-                try { foreach (var dv in card.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var selkws = card.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["id"] = card.Id.ToString(),
-                    ["name"] = _loc.Card(card.Id.Entry),
-                    ["cost"] = card.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = card.Type.ToString(),
-                    ["rarity"] = card.Rarity.ToString(),
-                    ["upgraded"] = card.IsUpgraded,
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["description"] = _loc.Text("cards", card.Id.Entry + ".description"),
-                    ["keywords"] = selkws?.Count > 0 ? selkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(card),
-                };
+                var info = CardInfo(card, card.Pile?.Type ?? PileType.None);
+                info["index"] = i;
+                return info;
             }).ToList();
 
             return new Dictionary<string, object?>
@@ -2075,6 +2035,9 @@ public partial class RunSimulator
                 ["min_select"] = _cardSelector.PendingMinSelect,
                 ["max_select"] = _cardSelector.PendingMaxSelect,
                 ["cancelable"] = _cardSelector.PendingCancelable,
+                ["prompt"] = string.IsNullOrEmpty(_cardSelector.PendingPrompt) ? null : _cardSelector.PendingPrompt,
+                ["source"] = string.IsNullOrEmpty(_cardSelector.PendingSource) ? null : _cardSelector.PendingSource,
+                ["combat"] = CombatSnapshot(player),
                 ["player"] = PlayerSummary(player),
             };
         }
@@ -2209,6 +2172,8 @@ public partial class RunSimulator
             ["decision"] = "map_select",
             ["context"] = RunContext(),
             ["choices"] = choices,
+            // The whole act map (as get_map returns it): a player always sees it when choosing.
+            ["map"] = GetFullMap().Where(kv => kv.Key != "type").ToDictionary(kv => kv.Key, kv => kv.Value),
             ["player"] = PlayerSummary(_runState!.Players[0]),
             ["act"] = _runState.CurrentActIndex + 1,
             ["act_id"] = _runState.Act?.Id.Entry,
@@ -2287,6 +2252,10 @@ public partial class RunSimulator
             // Whirlwind #82). Re-run the preview per enemy via MultiCreatureTargeting, the same
             // path the game uses to draw multi-target previews, and read the resolved vars.
             List<Dictionary<string, object?>>? damageByTarget = null;
+            var cardText = c.Type == CardType.Attack ? CardText(c, PileType.Hand) : "";
+            bool hasHitVar = c.DynamicVars.Values.Any(v => v.Name is "Repeat" or "CalculatedHits");
+            bool hitsKnown = !(cardText.Contains("twice", StringComparison.OrdinalIgnoreCase) && !hasHitVar)
+                             && !(hasHitVar && cardText.Contains("If ", StringComparison.Ordinal));
             if (c.Type == CardType.Attack && aliveEnemiesForTargeting.Count > 0
                 && (c.TargetType == TargetType.AnyEnemy || c.TargetType == TargetType.AllEnemies))
             {
@@ -2310,7 +2279,10 @@ public partial class RunSimulator
                             : (tstats.TryGetValue("damage", out var dv2) && dv2 is int di ? di : (int?)null);
                         // Hit count: explicit `repeat` var if present, else for X-cost attacks
                         // the hit count is the current X (= available energy), e.g. Whirlwind (#82).
-                        int repeat = tstats.TryGetValue("repeat", out var rv) && rv is int ri && ri > 0 ? ri : 1;
+                        // `calculatedhits` (Barrage, Finisher, Lunar Blast: hits counted from the
+                        // board) wins over the static `repeat`.
+                        int repeat = tstats.TryGetValue("calculatedhits", out var chv) && chv is int chi && chi > 0 ? chi
+                            : tstats.TryGetValue("repeat", out var rv) && rv is int ri && ri > 0 ? ri : 1;
                         if (repeat == 1 && c.EnergyCost?.CostsX == true && pcs != null)
                             repeat = pcs.Energy;
                         // Dismantle hits twice when the target is Vulnerable (#78). The doubled
@@ -2324,7 +2296,7 @@ public partial class RunSimulator
                         var row = new Dictionary<string, object?>
                         {
                             ["target_index"] = ti,
-                            ["name"] = _loc.Monster(tgt.Monster?.Id.Entry ?? "UNKNOWN"),
+                            ["name"] = MonsterName(tgt.Monster),
                         };
                         if (perHit != null) row["damage"] = perHit;
                         if (repeat > 1)
@@ -2332,6 +2304,10 @@ public partial class RunSimulator
                             row["repeat"] = repeat;
                             if (perHit != null) row["total_damage"] = perHit * repeat;
                         }
+                        // The hit count is only a guess when the text hard-codes extra hits
+                        // ("twice", Twin Strike) or the repeat is conditional (Spite: "If you lost
+                        // HP this turn"): say so instead of predicting a wrong total.
+                        if (!hitsKnown) row["hits_known"] = false;
                         damageByTarget.Add(row);
                     }
                     catch { }
@@ -2341,37 +2317,17 @@ public partial class RunSimulator
 
             // Use CurrentStarCost (combat-modified) for UI/can_play; BaseStarCost ignores temporary reductions.
             var starCost = c.CurrentStarCost;
-            var cardInfo = new Dictionary<string, object?>
-            {
-                ["index"] = i,
-                ["id"] = c.Id.ToString(),
-                ["name"] = _loc.Card(c.Id.Entry),
-                ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
-                ["type"] = c.Type.ToString(),
-                ["rarity"] = c.Rarity.ToString(),
-                ["can_play"] = c.CanPlay(out _, out _),
-                ["target_type"] = c.TargetType.ToString(),
-                ["stats"] = stats.Count > 0 ? stats : null,
-                ["description"] = _loc.Text("cards", c.Id.Entry + ".description"),
-            };
+            var cardInfo = CardInfo(c, PileType.Hand, upgradePreview: false);
+            cardInfo["index"] = i;
+            cardInfo["can_play"] = c.CanPlay(out _, out _);
+            cardInfo["target_type"] = c.TargetType.ToString();
+            cardInfo["stats"] = stats.Count > 0 ? stats : null;
             if (starCost > 0)
             {
                 cardInfo["star_cost"] = starCost;
                 // BUG-007: Override can_play for star-cost cards when player lacks stars
                 if (pcs != null && pcs.Stars < starCost)
                     cardInfo["can_play"] = false;
-            }
-            var kws = c.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-            if (kws?.Count > 0) cardInfo["keywords"] = kws;
-            if (c.Enchantment != null)
-            {
-                cardInfo["enchantment"] = _loc.Text("enchantments", c.Enchantment.Id.Entry + ".title");
-                try { if (c.Enchantment.Amount != 0) cardInfo["enchantment_amount"] = c.Enchantment.Amount; } catch { }
-            }
-            if (c.Affliction != null)
-            {
-                cardInfo["affliction"] = _loc.Text("afflictions", c.Affliction.Id.Entry + ".title");
-                try { if (c.Affliction.Amount != 0) cardInfo["affliction_amount"] = c.Affliction.Amount; } catch { }
             }
             if (damageByTarget != null && damageByTarget.Count > 0)
                 cardInfo["damage_by_target"] = damageByTarget;
@@ -2380,6 +2336,7 @@ public partial class RunSimulator
 
         var playerCreatures = combatState?.PlayerCreatures?.ToList();
 
+        var allEnemies = combatState?.Enemies?.ToList() ?? new();
         var enemies = combatState?.Enemies?
             .Where(e => e != null && e.IsAlive)
             .Select((e, i) =>
@@ -2420,6 +2377,22 @@ public partial class RunSimulator
                                 }
                                 catch { }
                             }
+                            if (intent is MegaCrit.Sts2.Core.MonsterMoves.Intents.StatusIntent status)
+                                intentInfo["card_count"] = status.CardCount;
+                            // The intent's hover tip: what the UI shows when you inspect it.
+                            try
+                            {
+                                if (intent.HasIntentTip && playerCreatures != null)
+                                {
+                                    // Cached on everything the tip shows (type, numbers, owner).
+                                    var tipKey = $"it|{intent.GetType().Name}|{e.Monster?.Id}|{intentInfo.GetValueOrDefault("damage")}|{intentInfo.GetValueOrDefault("hits")}|{intentInfo.GetValueOrDefault("card_count")}";
+                                    var label = Cached(tipKey + "|l", () => { var t = intent.GetHoverTip(playerCreatures, e); return CleanText(t.Title) + "\u0000" + CleanText(t.Description); });
+                                    var parts = label.Split('\u0000');
+                                    if (!string.IsNullOrWhiteSpace(parts[0])) intentInfo["label"] = parts[0];
+                                    if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) intentInfo["description"] = parts[1];
+                                }
+                            }
+                            catch { }
                             intents.Add(intentInfo);
                         }
                     }
@@ -2427,17 +2400,15 @@ public partial class RunSimulator
                 catch { }
 
                 // Enemy powers
-                var ePowers = e.Powers?.Select(pw => new Dictionary<string, object?>
-                {
-                    ["name"] = _loc.Power(pw.Id.Entry),
-                    ["description"] = _loc.Text("powers", pw.Id.Entry + ".description"),
-                    ["amount"] = pw.Amount,
-                }).ToList();
+                var ePowers = e.Powers?.Select(PowerInfo).ToList();
 
                 return new Dictionary<string, object?>
                 {
                     ["index"] = i,
-                    ["name"] = _loc.Monster(e.Monster?.Id.Entry ?? "UNKNOWN"),
+                    // Stable across deaths (index renumbers among alive enemies; target_index uses index).
+                    ["slot"] = allEnemies.IndexOf(e),
+                    ["id"] = e.Monster?.Id.ToString(),
+                    ["name"] = MonsterName(e.Monster),
                     ["hp"] = e.CurrentHp,
                     ["max_hp"] = e.MaxHp,
                     ["block"] = e.Block,
@@ -2448,12 +2419,7 @@ public partial class RunSimulator
             }).ToList() ?? new();
 
         // Player powers/buffs
-        var playerPowers = player.Creature?.Powers?.Select(pw => new Dictionary<string, object?>
-        {
-            ["name"] = _loc.Power(pw.Id.Entry),
-            ["description"] = _loc.Text("powers", pw.Id.Entry + ".description"),
-            ["amount"] = pw.Amount,
-        }).ToList();
+        var playerPowers = player.Creature?.Powers?.Select(PowerInfo).ToList();
 
         var result = new Dictionary<string, object?>
         {
@@ -2469,6 +2435,12 @@ public partial class RunSimulator
             ["player_powers"] = playerPowers?.Count > 0 ? playerPowers : null,
             ["draw_pile_count"] = pcs?.DrawPile?.Cards?.Count ?? 0,
             ["discard_pile_count"] = pcs?.DiscardPile?.Cards?.Count ?? 0,
+            ["exhaust_pile_count"] = pcs?.ExhaustPile?.Cards?.Count ?? 0,
+            // The UI lets you view all three piles. The draw pile is sorted so its order (the
+            // upcoming draws) stays hidden, as in the game's draw pile view.
+            ["draw_pile"] = PileCards(pcs?.DrawPile?.Cards, sort: true),
+            ["discard_pile"] = PileCards(pcs?.DiscardPile?.Cards, sort: false),
+            ["exhaust_pile"] = PileCards(pcs?.ExhaustPile?.Cards, sort: false),
         };
 
         // Character-specific mechanics
@@ -2486,8 +2458,9 @@ public partial class RunSimulator
                     ["passive"] = (int)orb.PassiveVal,
                     ["evoke"] = (int)orb.EvokeVal,
                 }).ToList();
-                result["orb_slots"] = orbQueue.Capacity;
             }
+            if (orbQueue != null && orbQueue.Capacity > 0)
+                result["orb_slots"] = orbQueue.Capacity;
 
             // Regent: Stars
             if (pcs != null && pcs.Stars >= 0 && player.Character?.Id.Entry == "REGENT")
@@ -2499,13 +2472,15 @@ public partial class RunSimulator
             var osty = player.Osty;
             if (osty != null)
             {
+                var ostyPowers = osty.Powers?.Select(PowerInfo).ToList();
                 result["osty"] = new Dictionary<string, object?>
                 {
-                    ["name"] = _loc.Monster(osty.Monster?.Id.Entry ?? "OSTY"),
+                    ["name"] = MonsterName(osty.Monster),
                     ["hp"] = osty.CurrentHp,
                     ["max_hp"] = osty.MaxHp,
                     ["block"] = osty.Block,
                     ["alive"] = osty.IsAlive,
+                    ["powers"] = ostyPowers?.Count > 0 ? ostyPowers : null,
                 };
             }
             else if (player.Character?.Id.Entry == "NECROBINDER")
@@ -2613,22 +2588,9 @@ public partial class RunSimulator
 
         var cards = _pendingCardReward.Cards.Select((c, i) =>
         {
-            var stats = new Dictionary<string, object?>();
-            try { foreach (var dv in c.DynamicVars.Values) stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-            var crkws = c.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-            return new Dictionary<string, object?>
-            {
-                ["index"] = i,
-                ["id"] = c.Id.ToString(),
-                ["name"] = _loc.Card(c.Id.Entry),
-                ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
-                ["type"] = c.Type.ToString(),
-                ["rarity"] = c.Rarity.ToString(),
-                ["description"] = _loc.Text("cards", c.Id.Entry + ".description"),
-                ["stats"] = stats.Count > 0 ? stats : null,
-                ["keywords"] = crkws?.Count > 0 ? crkws : null,
-                ["after_upgrade"] = GetUpgradedInfo(c),
-            };
+            var info = CardInfo(c, PileType.None);
+            info["index"] = i;
+            return info;
         }).ToList();
 
         return new Dictionary<string, object?>
@@ -2661,6 +2623,10 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> EventChoiceState(EventRoom eventRoom)
     {
+        // The Fake Merchant has no options: its custom screen is a shop (and a merchant to throw
+        // a Foul Potion at).
+        if (HeadlessUiPatches.ActiveFakeMerchant(_runState?.Players[0]) is { } fakeMerchant)
+            return FakeMerchantState(fakeMerchant, _runState!.Players[0]);
         if (_manualFlow && ManualFinishedEventState() is { } finishedEvent) return finishedEvent;
         var localEvent = RunManager.Instance.EventSynchronizer?.GetLocalEvent();
         _syncCtx.Pump();
@@ -2702,15 +2668,8 @@ public partial class RunSimulator
         var options = currentOptions
             .Select((opt, i) =>
             {
-                // Try to resolve title via loc tables
-                string? title = null;
-                if (opt.Title != null)
-                {
-                    var t = _loc.Text(opt.Title.LocTable, opt.Title.LocEntryKey);
-                    // Check if we actually found a translation (not just the key echoed back)
-                    if (t != opt.Title.LocEntryKey)
-                        title = t;
-                }
+                // Title and description as the option button renders them (event vars filled in).
+                var (title, optDesc) = EventOptionText(localEvent, opt);
                 // Fallback: try to extract option ID from the key and look up as relic/card/potion
                 if (title == null && opt.TextKey != null)
                 {
@@ -2732,14 +2691,6 @@ public partial class RunSimulator
                 }
                 title ??= $"option_{i}";
 
-                // Description: try loc table first
-                string? optDesc = null;
-                if (opt.Description != null && !string.IsNullOrEmpty(opt.Description.LocEntryKey))
-                {
-                    var d = _loc.Text(opt.Description.LocTable, opt.Description.LocEntryKey);
-                    if (d != opt.Description.LocEntryKey)
-                        optDesc = d;
-                }
                 // Fallback: try relic/card description
                 if (optDesc == null && opt.TextKey != null)
                 {
@@ -2807,6 +2758,7 @@ public partial class RunSimulator
                     ["is_locked"] = opt.IsLocked,
                     ["is_proceed"] = opt.IsProceed ? true : null,
                     ["vars"] = optVars?.Count > 0 ? optVars : null,
+                    ["offers"] = EventOptionOffers(opt),
                 };
             }).ToList();
 
@@ -2820,7 +2772,7 @@ public partial class RunSimulator
         string? eventDesc = null;
         if (localEvent.Description != null)
         {
-            var d = _loc.Text(localEvent.Description.LocTable, localEvent.Description.LocEntryKey);
+            var d = EventBodyText(localEvent);
             if (d != localEvent.Description.LocEntryKey)
                 eventDesc = d;
         }
@@ -2851,13 +2803,7 @@ public partial class RunSimulator
             return MapSelectState();
         }
 
-        var optionList = options.Select((opt, i) => new Dictionary<string, object?>
-        {
-            ["index"] = i,
-            ["option_id"] = opt.OptionId,
-            ["name"] = opt.GetType().Name,
-            ["is_enabled"] = opt.IsEnabled,
-        }).ToList();
+        var optionList = options.Select(RestOptionInfo).ToList();
 
         return new Dictionary<string, object?>
         {
@@ -2878,16 +2824,16 @@ public partial class RunSimulator
             .Select((e, i) =>
             {
                 var card = e.CreationResult?.Card;
-                var entry = card?.Id.Entry ?? "?";
-                var stats = new Dictionary<string, object?>();
-                int cardCost = 0;
+                // In a shop row "cost" is the gold price (as before; also "price"), and the card's
+                // energy cost is "card_cost".
+                var info = card != null ? CardInfo(card, PileType.None) : new Dictionary<string, object?> { ["name"] = "?" };
                 try
                 {
                     if (card != null)
                     {
-                        cardCost = card.EnergyCost?.GetResolved() ?? 0;
+                        info["card_cost"] = card.EnergyCost?.GetResolved() ?? 0;
                         // The shop entry's card can have uninitialized DynamicVars (stats: null
-                        // while after_upgrade is populated, #68). Read base stats from a fresh
+                        // while after_upgrade is populated, #68). Read stats and text from a fresh
                         // ModelDb clone at the card's current upgrade level, like GetUpgradedInfo.
                         var fresh = ModelDb.GetById<CardModel>(card.Id).ToMutable();
                         for (int u = 0; u < card.CurrentUpgradeLevel; u++)
@@ -2895,45 +2841,29 @@ public partial class RunSimulator
                             fresh.UpgradeInternal();
                             fresh.FinalizeUpgradeInternal();
                         }
-                        foreach (var dv in fresh.DynamicVars.Values)
-                            stats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue;
+                        info["stats"] = CardStats(fresh);
+                        info["description"] = CardText(fresh, PileType.None);
                     }
                 }
                 catch { }
-                var shopkws = card?.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["name"] = _loc.Card(entry),
-                    ["type"] = card?.Type.ToString() ?? "?",
-                    ["rarity"] = card?.Rarity.ToString() ?? "?",
-                    ["card_cost"] = cardCost,
-                    ["description"] = _loc.Text("cards", entry + ".description"),
-                    ["stats"] = stats.Count > 0 ? stats : null,
-                    ["keywords"] = shopkws?.Count > 0 ? shopkws : null,
-                    ["after_upgrade"] = card != null ? GetUpgradedInfo(card) : null,
-                    ["cost"] = e.Cost,
-                    ["is_stocked"] = e.IsStocked,
-                    ["on_sale"] = e.IsOnSale,
-                };
+                info["index"] = i;
+                info["cost"] = e.Cost;
+                info["price"] = e.Cost;
+                info["is_stocked"] = e.IsStocked;
+                info["on_sale"] = e.IsOnSale;
+                return info;
             }).ToList();
 
-        var relics = inv.RelicEntries.Select((e, i) => new Dictionary<string, object?>
-        {
-            ["index"] = i,
-            ["name"] = _loc.Relic(e.Model?.Id.Entry ?? "?"),
-            ["description"] = _loc.Text("relics", (e.Model?.Id.Entry ?? "?") + ".description"),
-            ["cost"] = e.Cost,
-            ["is_stocked"] = e.IsStocked,
-        }).ToList();
+        var relics = RelicRows(inv);
 
-        var potions = inv.PotionEntries.Select((e, i) => new Dictionary<string, object?>
+        var potions = inv.PotionEntries.Select((e, i) =>
         {
-            ["index"] = i,
-            ["name"] = _loc.Potion(e.Model?.Id.Entry ?? "?"),
-            ["description"] = _loc.Text("potions", (e.Model?.Id.Entry ?? "?") + ".description"),
-            ["cost"] = e.Cost,
-            ["is_stocked"] = e.IsStocked,
+            var info = e.Model != null ? PotionInfo(e.Model) : new Dictionary<string, object?>();
+            info["index"] = i;
+            info["cost"] = e.Cost;
+            info["price"] = e.Cost;
+            info["is_stocked"] = e.IsStocked;
+            return info;
         }).ToList();
 
         var removal = merchantRoom.GetLocalInventory().CardRemovalEntry;
@@ -2950,6 +2880,29 @@ public partial class RunSimulator
             ["player"] = PlayerSummary(player),
         };
     }
+
+    /// <summary>Sold-out slots have no model: they keep index/cost/is_stocked but no item fields.</summary>
+    private List<Dictionary<string, object?>> RelicRows(MerchantInventory inv) =>
+        inv.RelicEntries.Select((e, i) =>
+        {
+            var info = e.Model != null ? RelicInfo(e.Model) : new Dictionary<string, object?>();
+            info["index"] = i;
+            info["cost"] = e.Cost;
+            info["price"] = e.Cost;
+            info["is_stocked"] = e.IsStocked;
+            return info;
+        }).ToList();
+
+    /// <summary>The Merchant??? (FakeMerchant event): a relic-only shop of fake relics.</summary>
+    private Dictionary<string, object?> FakeMerchantState(MegaCrit.Sts2.Core.Models.Events.FakeMerchant fakeMerchant, Player player) => new()
+    {
+        ["type"] = "decision",
+        ["decision"] = "fake_merchant",
+        ["context"] = RunContext(),
+        ["event_name"] = _loc.Event(fakeMerchant.Id.Entry),
+        ["relics"] = RelicRows(fakeMerchant.Inventory),
+        ["player"] = PlayerSummary(player),
+    };
 
     private Dictionary<string, object?> TreasureState(TreasureRoom treasureRoom)
     {
@@ -3154,7 +3107,7 @@ public partial class RunSimulator
             {
                 ["cost"] = clone.EnergyCost?.GetResolved() ?? 0,
                 ["stats"] = stats.Count > 0 ? stats : null,
-                ["description"] = _loc.Text("cards", card.Id.Entry + ".description"),
+                ["description"] = Rendered(() => clone.GetDescriptionForPile(PileType.None), "cards", card.Id.Entry + ".description"),
                 ["added_keywords"] = addedKws.Count > 0 ? addedKws : null,
                 ["removed_keywords"] = removedKws.Count > 0 ? removedKws : null,
             };
@@ -3171,63 +3124,22 @@ public partial class RunSimulator
             ["max_hp"] = player.Creature?.MaxHp ?? 0,
             ["block"] = player.Creature?.Block ?? 0,
             ["gold"] = player.Gold,
-            ["relics"] = player.Relics?.Select(r =>
-            {
-                var vars = new Dictionary<string, object?>();
-                try { foreach (var dv in r.DynamicVars.Values) vars[dv.Name] = (int)dv.BaseValue; } catch { }
-                return new Dictionary<string, object?>
-                {
-                    ["name"] = _loc.Relic(r.Id.Entry),
-                    ["description"] = _loc.Text("relics", r.Id.Entry + ".description"),
-                    ["vars"] = vars.Count > 0 ? vars : null,
-                };
-            }).ToList(),
+            ["relics"] = player.Relics?.Select(RelicInfo).ToList(),
+            // Filled slots only, each with its slot index (use_potion/discard_potion take it);
+            // max_potions is the slot count, so the agent can tell when slots are full.
             ["potions"] = player.Potions?.Select((p, i) =>
             {
                 if (p == null) return null;
+                var info = PotionInfo(p);
+                info["index"] = i;
                 var pvars = new Dictionary<string, object?>();
                 try { foreach (var dv in p.DynamicVars.Values) pvars[dv.Name] = (int)dv.BaseValue; } catch { }
-                return new Dictionary<string, object?>
-                {
-                    ["index"] = i,
-                    ["name"] = _loc.Potion(p.Id.Entry),
-                    ["description"] = _loc.Text("potions", p.Id.Entry + ".description"),
-                    ["vars"] = pvars.Count > 0 ? pvars : null,
-                    ["target_type"] = p.TargetType.ToString(),
-                };
+                info["vars"] = pvars.Count > 0 ? pvars : null;
+                return info;
             }).Where(x => x != null).ToList(),
+            ["max_potions"] = player.MaxPotionCount,
             ["deck_size"] = player.Deck?.Cards?.Count(c => c != null) ?? 0,
-            ["deck"] = player.Deck?.Cards?.Where(c => c != null).Select(c =>
-            {
-                var dstats = new Dictionary<string, object?>();
-                try { foreach (var dv in c.DynamicVars.Values) dstats[dv.Name.ToLowerInvariant()] = (int)dv.BaseValue; } catch { }
-                var dkws = c.Keywords?.Where(k => k != CardKeyword.None).Select(k => k.ToString()).ToList();
-                var dcard = new Dictionary<string, object?>
-                {
-                    ["id"] = c.Id.ToString(),
-                    ["name"] = _loc.Card(c.Id.Entry),
-                    ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
-                    ["type"] = c.Type.ToString(),
-                    ["upgraded"] = c.IsUpgraded,
-                    ["description"] = _loc.Text("cards", c.Id.Entry + ".description"),
-                    ["stats"] = dstats.Count > 0 ? dstats : null,
-                    ["keywords"] = dkws?.Count > 0 ? dkws : null,
-                    ["after_upgrade"] = GetUpgradedInfo(c),
-                };
-                // Enchantment/affliction metadata, matching the combat hand export so clients
-                // can see e.g. Slither applied to a deck card after an event (#76).
-                if (c.Enchantment != null)
-                {
-                    dcard["enchantment"] = _loc.Text("enchantments", c.Enchantment.Id.Entry + ".title");
-                    try { if (c.Enchantment.Amount != 0) dcard["enchantment_amount"] = c.Enchantment.Amount; } catch { }
-                }
-                if (c.Affliction != null)
-                {
-                    dcard["affliction"] = _loc.Text("afflictions", c.Affliction.Id.Entry + ".title");
-                    try { if (c.Affliction.Amount != 0) dcard["affliction_amount"] = c.Affliction.Amount; } catch { }
-                }
-                return dcard;
-            }).ToList(),
+            ["deck"] = player.Deck?.Cards?.Where(c => c != null).Select(c => CardInfo(c, PileType.Deck)).ToList(),
         };
     }
 
@@ -3244,23 +3156,18 @@ public partial class RunSimulator
             ["room_type"] = _runState.CurrentRoom?.RoomType.ToString(),
             ["seed"] = _runState.Rng?.StringSeed,
             ["ascension"] = _runState.AscensionLevel,
+            ["total_floor"] = _runState.TotalFloor,
+            ["flow"] = _manualFlow ? "manual" : "auto",
         };
 
         // Boss encounter info — use BossEncounter?.Id?.Entry
         try
         {
-            var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
-            if (!string.IsNullOrEmpty(bossIdEntry))
-            {
-                var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
-                // Handle special mappings
-                if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
-                ctx["boss"] = new Dictionary<string, object?>
-                {
-                    ["id"] = bossIdEntry,
-                    ["name"] = _loc.Monster(monsterKey),
-                };
-            }
+            if (_runState.Act?.BossEncounter is { } boss)
+                ctx["boss"] = EncounterInfo(boss);
+            // Double-boss acts (Ascension 10): the second boss is fought after the first.
+            if (_runState.Act?.SecondBossEncounter is { } second)
+                ctx["second_boss"] = EncounterInfo(second);
         }
         catch { }
 
@@ -3575,6 +3482,8 @@ public partial class RunSimulator
         public string PendingPrompt { get; private set; } = "";
         /// <summary>The UI lets the player back out (Smith, Cook, shop removal): skip_select cancels.</summary>
         public bool PendingCancelable { get; private set; }
+        /// <summary>The CardSelectCmd entry point without "From" (HandForDiscard, DeckForUpgrade, ChooseACardScreen...).</summary>
+        public string PendingSource { get; private set; } = "";
         private TaskCompletionSource<IEnumerable<CardModel>>? _pendingTcs;
 
         public bool HasPending => _pendingTcs != null && !_pendingTcs.Task.IsCompleted;
@@ -3601,7 +3510,8 @@ public partial class RunSimulator
             PendingMinSelect = minSelect;
             PendingMaxSelect = maxSelect;
             PendingCancelable = cancelable;
-            PendingPrompt = info?.PromptKey ?? "";
+            PendingPrompt = info?.Prompt ?? "";
+            PendingSource = info?.Source ?? "";
             _pendingTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
 
             Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}");
@@ -3956,22 +3866,9 @@ public partial class RunSimulator
             }
             catch (Exception ex) { PatchReport.Warn($"Crystal Sphere patch: {ex.Message}"); }
 
-            // Patch HasEntry to always return true
-            PatchMethod(harmony, typeof(LocTable), "HasEntry", nameof(LocPatches.HasEntryPrefix));
-
-            // Patch IsLocalKey to always return true
-            PatchMethod(harmony, typeof(LocTable), "IsLocalKey", nameof(LocPatches.HasEntryPrefix));
-
-            // Patch LocString.Exists (static) to always return true
-            var locStringExists = typeof(LocString).GetMethod("Exists",
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (locStringExists != null)
-            {
-                PatchMethod(harmony, locStringExists, nameof(LocPatches.HasEntryPrefix));
-            }
-
-            // Patch LocTable.GetLocStringsWithPrefix to return empty list
-            PatchMethod(harmony, typeof(LocTable), "GetLocStringsWithPrefix", nameof(LocPatches.GetLocStringsWithPrefixPrefix));
+            // HasEntry / IsLocalKey / LocString.Exists / GetLocStringsWithPrefix run unpatched: the
+            // real tables are loaded, and forcing them (always true / always empty) changed game
+            // logic (Ancient dialogue, TheArchitect's dialogue pick, merchant lines).
         }
         catch (Exception ex)
         {
@@ -4002,9 +3899,10 @@ public partial class RunSimulator
 
     internal static class LocPatches
     {
+        /// <summary>Real text when the key exists; the key itself (instead of a LocException) when not.</summary>
         public static bool GetRawTextPrefix(LocTable __instance, string key, ref string __result)
         {
-            // Return key as fallback "translation"
+            if (__instance.HasEntry(key)) return true;
             __result = key;
             return false;
         }
@@ -4022,14 +3920,9 @@ public partial class RunSimulator
         }
 
 
-        public static bool HasEntryPrefix(ref bool __result)
-        {
-            __result = true;
-            return false;
-        }
-
         public static bool GetLocStringPrefix(LocTable __instance, string key, ref LocString __result)
         {
+            if (__instance.HasEntry(key)) return true;
             var nameField = typeof(LocTable).GetField("_name",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
             var tableName = nameField?.GetValue(__instance) as string ?? "_unknown";
@@ -4080,11 +3973,6 @@ public partial class RunSimulator
             return false;
         }
 
-        public static bool GetLocStringsWithPrefixPrefix(ref IReadOnlyList<LocString> __result)
-        {
-            __result = new List<LocString>();
-            return false;
-        }
     }
 
     private static void Log(string message)
@@ -4158,13 +4046,11 @@ public partial class RunSimulator
         // Add boss name/id — use BossEncounter?.Id?.Entry
         try
         {
-            var bossIdEntry = _runState.Act?.BossEncounter?.Id?.Entry;
-            if (!string.IsNullOrEmpty(bossIdEntry))
+            if (_runState.Act?.BossEncounter is { } boss)
             {
-                var monsterKey = bossIdEntry.EndsWith("_BOSS") ? bossIdEntry[..^5] : bossIdEntry;
-                if (monsterKey == "THE_KIN") monsterKey = "KIN_PRIEST";
-                bossNode["id"] = bossIdEntry;
-                bossNode["name"] = _loc.Monster(monsterKey);
+                var info = EncounterInfo(boss);
+                bossNode["id"] = info["id"];
+                bossNode["name"] = info["name"];
             }
         }
         catch { }
@@ -4207,6 +4093,7 @@ public partial class RunSimulator
         _rewardsProcessed = false;
         _eventOptionChosen = false;
         _lastEventOptionCount = 0;
+        _textCache.Clear();
     }
 
     public void CleanUp()

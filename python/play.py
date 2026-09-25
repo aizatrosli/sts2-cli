@@ -838,11 +838,12 @@ def show_card_reward(state):
 
 def show_shop(state):
     print(f"\n{'─' * 60}")
-    print(f"  {c('Shop', 'bold')}")
+    print(f"  {c(state.get('event_name') or 'Shop', 'bold')}")
     show_player(state.get("player", {}))
     gold = state.get("player", {}).get("gold", 0)
 
-    print(f"\n  {c('Cards:', 'bold')}")
+    if state.get("cards"):
+        print(f"\n  {c('Cards:', 'bold')}")
     for card in state.get("cards", []):
         if not card.get("is_stocked"): continue
         cost = card.get("cost", 0)
@@ -864,7 +865,8 @@ def show_shop(state):
         if r_desc:
             print(f"      {c(r_desc, 'dim')}")
 
-    print(f"\n  {c('Potions:', 'bold')}")
+    if state.get("potions"):
+        print(f"\n  {c('Potions:', 'bold')}")
     for p in state.get("potions", []):
         if not p.get("is_stocked"): continue
         cost = p.get("cost", 0)
@@ -1795,11 +1797,13 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
                             parts.append(c(f"+{card_name}" + (f"x{cnt}" if cnt > 1 else ""), "green"))
                         print(f"\n  {c('Changes:', 'yellow')} Deck: {' '.join(parts)}")
 
-            elif dec == "shop":
+            elif dec in ("shop", "fake_merchant"):
                 show_shop(state)
 
                 if auto:
                     choice = "leave"
+                elif dec == "fake_merchant":
+                    choice = get_input("Buy [r0] or (leave)", state=state)
                 else:
                     choice = get_input("Buy [index/r0/p0/rm] or (leave)", state=state)
 
