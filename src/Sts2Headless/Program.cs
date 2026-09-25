@@ -85,6 +85,10 @@ class Program
             try
             {
                 var cmd = JsonSerializer.Deserialize<JsonElement>(line);
+                // Anything but an action or a read may change state: the next action revalidates
+                // against a fresh legal set (actions refresh it themselves).
+                var cmdName = cmd.TryGetProperty("cmd", out var cn) && cn.ValueKind == JsonValueKind.String ? cn.GetString() : null;
+                if (cmdName is not ("action" or "get_map")) sim.InvalidateLegal();
                 result = HandleCommand(sim, cmd);
                 sim.AttachLegalActions(result);
             }

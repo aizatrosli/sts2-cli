@@ -51,6 +51,8 @@ Expected: `Completed: 5/5` for every character.
   - `dotnet run --project tools/GodotStubDiff -- --real <game dir>/GodotSharp.dll` — fuzzes stub value types against the real assembly; must report 0 mismatches.
   - `tests/test_godot_stubs.py` runs both (the real-assembly parts need `STS2_GODOTSHARP_DLL` or `STS2_GAME_DIR`).
 - **legal_actions** (`RunSimulator.LegalActions.cs`) is computed from the exported decision and live state. Every entry it lists must be accepted by `ExecuteAction`; `python3 python/sts2_env.py N <char> --flow manual [--god]` reports any rejection.
+- **Validation gate** (`RunSimulator.Validation.cs`): `ExecuteAction` only runs actions in the last exported legal set (always on, no opt-out). Anything else returns an error before touching state. Handlers still check their own inputs (defense in depth). A new action must be added to `ComputeLegalActions`, or the gate rejects it. `tools/fuzz_legal.py` probes unlisted actions and checks that rejected ones change nothing.
+- **Selection prefs** (`SelectionPrefsPatches.cs`): prefixes on `CardSelectCmd.From*` record `canSkip` and `CardSelectorPrefs` (cancelable, prompt) because the selector hook drops them.
 
 ## Protocol notes
 

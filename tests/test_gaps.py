@@ -76,7 +76,6 @@ def is_error(resp):
 # --- Phase 1: actions outside legal_actions are rejected and change nothing ---------------
 
 class TestValidation:
-    @gap(1, "select_map_node accepts unreachable nodes")
     def test_map_select_rejects_unreachable_node(self, game):
         state = to_map(game)
         reachable = {(c["col"], c["row"]) for c in state["choices"]}
@@ -86,7 +85,6 @@ class TestValidation:
         assert is_error(resp), resp.get("context")
         assert game.send({"cmd": "get_state"})["decision"] == "map_select"
 
-    @gap(1, "select_map_node works mid-combat")
     def test_map_select_rejected_in_combat(self, game):
         state = first_combat(game, ["STRIKE_SILENT"] * 5 + ["DEFEND_SILENT"] * 5)
         rows = game.get_map()["rows"]
@@ -95,7 +93,6 @@ class TestValidation:
         assert is_error(resp)
         assert game.send({"cmd": "get_state"})["decision"] == "combat_play"
 
-    @gap(1, "select_cards ignores min/max, duplicates and junk")
     @pytest.mark.parametrize("indices", ["0,1,2", "0,0", "", "99", "x"])
     def test_select_cards_bad_indices_rejected(self, game, indices):
         to_map(game)
@@ -108,7 +105,6 @@ class TestValidation:
         after = game.send({"cmd": "get_state"})
         assert sum(c["upgraded"] for c in after["player"]["deck"]) == 0
 
-    @gap(1, "skip_select is accepted when a pick is required")
     def test_skip_select_rejected_when_min_positive(self, game):
         state = first_combat(game, ["SURVIVOR"] * 5 + ["STRIKE_SILENT"] * 5)
         state = game.act("play_card", card_index=hand_index(state, "SURVIVOR"))
@@ -116,7 +112,6 @@ class TestValidation:
         assert "skip_select" not in legal_names(state)
         assert is_error(game.act("skip_select"))
 
-    @gap(1, "a rejected play_card still resolves after the selection")
     def test_rejected_play_card_has_no_effect(self, game):
         def discard_a_survivor(state):
             idx = next(c["index"] for c in state["cards"] if "SURVIVOR" in c["id"])
@@ -136,7 +131,6 @@ class TestValidation:
         assert [e["hp"] for e in probed["enemies"]] == [e["hp"] for e in clean["enemies"]]
         assert probed["energy"] == clean["energy"]
 
-    @gap(1, "a rejected start_run destroys the current run")
     def test_rejected_start_run_keeps_run(self, game):
         to_map(game)
         assert is_error(game.start(character="NotACharacter"))
@@ -171,7 +165,6 @@ class TestGameRules:
         state = game.act("select_map_node", col=ancient["col"], row=ancient["row"])
         assert state["player"]["hp"] == 84  # 20 + 80% of 80 missing (A2 Weary Traveler)
 
-    @gap(2, "choose-a-card screens that cannot be skipped are skippable")
     def test_abundance_choice_is_mandatory(self, game):
         state = first_combat(game, ["ABUNDANCE"] * 6, character="Ironclad")
         state = game.act("play_card", card_index=hand_index(state, "ABUNDANCE"))
@@ -200,7 +193,6 @@ class TestGameRules:
         hp2 = state["enemies"][0]["hp"]
         assert hp0 - hp1 > hp1 - hp2 == 3  # Vigor boosts only the first attack
 
-    @gap(2, "a combat-only potion used on the map is silently destroyed")
     def test_unusable_potion_is_not_consumed(self, game):
         to_map(game)
         game.set_player(potions=["FIRE_POTION"])
@@ -250,7 +242,6 @@ class TestRobustness:
 
 
 class TestFuzz:
-    @gap(1, "unlisted actions are accepted or change state")
     @pytest.mark.parametrize("flow", ["manual", "auto"])
     def test_short_fuzz_finds_no_violations(self, flow):
         import argparse

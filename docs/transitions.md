@@ -32,6 +32,19 @@ exactly the body of an `action` command, so an agent can send it back unchanged:
 `"template": true`, `min_select`, `max_select` and `num_cards`. Fill in `args.indices`
 (comma-separated) before sending it.
 
+**`legal_actions` is enforced.** An action that is not in the list the adapter last sent is
+rejected with `{"type": "error", "message": "Illegal action ...", "decision": ...}` and changes
+nothing. `select_cards` must use distinct indices within `0..num_cards-1`, and between
+`min_select` and `max_select` of them. Two equivalences are accepted: `leave_room` for
+`proceed` (and the reverse in auto-flow shops), and `target_index: 0` on an entry listed
+without a target (the only possible target). Commands other than `action` (`start_run`,
+`load_save`, the debug commands) refresh the legal set; `get_state` re-sends it.
+
+`card_select` has `cancelable: true` on screens the UI lets you back out of (Smith, shop card
+removal). There `skip_select` is listed even though `min_select` is 1, and it cancels without
+spending anything. Choose-a-card screens that cannot be skipped in the game (Knowledge Demon's
+curse, Toolbox, Abundance) have `min_select: 1`.
+
 `{"cmd": "get_state"}` returns the current decision point again without acting. Use it to
 re-sync after an `error` response.
 

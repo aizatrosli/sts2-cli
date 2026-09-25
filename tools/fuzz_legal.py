@@ -31,6 +31,19 @@ def key(action):
     return json.dumps({"action": action["action"], "args": action.get("args") or {}}, sort_keys=True)
 
 
+def equivalent_keys(action):
+    """Keys the engine treats as the same action (see RunSimulator.Validation.cs)."""
+    keys = {key(action)}
+    args = dict(action.get("args") or {})
+    alias = {"leave_room": "proceed", "proceed": "leave_room"}.get(action["action"])
+    if alias:
+        keys.add(key({"action": alias, "args": args}))
+    if args.get("target_index") == 0:  # "the only target" on an entry listed without a target
+        rest = {k: v for k, v in args.items() if k != "target_index"}
+        keys.add(key({"action": action["action"], "args": rest}))
+    return keys
+
+
 def template_ok(tmpl, indices):
     """True when `indices` is a valid fill of a select_cards template."""
     toks = indices.split(",") if indices else []
@@ -144,7 +157,7 @@ class Fuzzer:
                 reachable = {(c["col"], c["row"]) for c in state.get("choices") or []}
                 map_nodes = [n for row in m.get("rows") or [] for n in row
                              if (n["col"], n["row"]) not in reachable][:3]
-            candidates = [p for p in probes(state, map_nodes) if key(p) not in listed
+            candidates = [p for p in probes(state, map_nodes) if not (equivalent_keys(p) & listed)
                           and not (tmpl and p["action"] == "select_cards" and template_ok(tmpl, p["args"]["indices"]))]
             self.rng.shuffle(candidates)
             for probe in candidates[:self.args.probes]:

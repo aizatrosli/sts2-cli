@@ -254,11 +254,14 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
                              "args": {"bundle_index": 0}})
 
             elif decision == "card_select":
-                # Auto-select first card
+                # Pick the first cards: at least one when allowed, never outside min..max
                 cards = state.get("cards", [])
-                if cards:
+                lo = state.get("min_select") or 0
+                hi = state.get("max_select") or 0
+                n = min(max(lo, 1), hi, len(cards))
+                if n > 0:
                     state = send({"cmd": "action", "action": "select_cards",
-                                 "args": {"indices": "0"}})
+                                 "args": {"indices": ",".join(str(i) for i in range(n))}})
                 else:
                     state = send({"cmd": "action", "action": "skip_select"})
 

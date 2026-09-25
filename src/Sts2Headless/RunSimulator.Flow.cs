@@ -74,17 +74,17 @@ public partial class RunSimulator
         get { lock (_flowLock) return _rewardsScreens.Count > 0 ? _rewardsScreens[^1] : null; }
     }
 
-    private bool TrySetFlow(string? flow, out string error)
+    private static bool TryParseFlow(string? flow, out bool manual, out string error)
     {
         error = "";
+        manual = false;
         switch ((flow ?? "auto").Trim().ToLowerInvariant())
         {
             case "auto":
             case "":
-                _manualFlow = false;
                 return true;
             case "manual":
-                _manualFlow = true;
+                manual = true;
                 return true;
             default:
                 error = $"Unknown flow '{flow}' (expected 'auto' or 'manual')";

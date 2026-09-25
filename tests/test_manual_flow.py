@@ -18,7 +18,7 @@ def start_manual(game, seed):
             opts = [o for o in state["options"] if not o.get("is_locked")]
             state = game.act("choose_option", option_index=opts[0]["index"])
         elif dec == "card_select":
-            state = game.act("select_cards", indices="0") if state["min_select"] else game.act("skip_select")
+            state = game.select_min(state)
         elif dec == "card_reward":
             state = game.act("skip_card_reward")
         elif dec == "bundle_select":
@@ -32,7 +32,7 @@ def win_combat(game, state):
     for _ in range(400):
         dec = state.get("decision")
         if dec == "card_select":  # a card or enemy move asked for a choice mid-combat
-            state = game.act("select_cards", indices="0") if state["min_select"] else game.act("skip_select")
+            state = game.select_min(state)
         elif dec == "combat_play":
             state = game.auto_combat(state)
         else:
@@ -71,7 +71,7 @@ class TestNeowProceed:
         # Any follow-up selection must be resolved before Proceed shows up.
         while state["decision"] in ("card_select", "card_reward", "bundle_select", "rewards"):
             if state["decision"] == "card_select":
-                state = game.act("select_cards", indices="0") if state["min_select"] else game.act("skip_select")
+                state = game.select_min(state)
             elif state["decision"] == "card_reward":
                 state = game.act("skip_card_reward")
             elif state["decision"] == "bundle_select":

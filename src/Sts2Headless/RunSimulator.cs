@@ -198,21 +198,25 @@ public partial class RunSimulator
     {
         try
         {
-            if (!TrySetFlow(flow, out var flowError)) return Error(flowError);
+            // Validate everything first: a rejected start_run must leave the current run intact.
+            if (!TryParseFlow(flow, out var manual, out var flowError)) return Error(flowError);
+            if (ascension < 0 || ascension > MaxAscension)
+                return Error($"Ascension must be 0–{MaxAscension}, got {ascension}");
+            if (!KnownCharacters.Contains(character.ToLowerInvariant()))
+                return Error($"Unknown character: {character}");
+            EnsureModelDbInitialized();
+            var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (!TrySelectActs(seedStr, act1, out var acts, out var actError))
+                return Error(actError);
+
             // A new run in the same process (e.g. an RL env reset) must tear down the previous
             // one first; RunManager.SetUpTest refuses to run twice ("State is already set").
             if (_runState != null) CleanUp();
             ResetRunScopedState();
             ResetManualFlowState();
-            EnsureModelDbInitialized();
+            _manualFlow = manual;
 
-            var player = CreatePlayer(character);
-            if (player == null)
-                return Error($"Unknown character: {character}");
-
-            var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            if (!TrySelectActs(seedStr, act1, out var acts, out var actError))
-                return Error(actError);
+            var player = CreatePlayer(character)!;
             Log($"Creating RunState with seed={seedStr}, acts={string.Join(",", acts.Select(a => a.Id.Entry))}");
 
             // Use CreateForTest which properly handles mutable copies internally
@@ -495,10 +499,8 @@ public partial class RunSimulator
     {
         try
         {
-            if (!TrySetFlow(flow, out var flowError)) return Error(flowError);
-            if (_runState != null) CleanUp();
-            ResetRunScopedState();
-            ResetManualFlowState();
+            // Validate and parse first: a rejected load_save must leave the current run intact.
+            if (!TryParseFlow(flow, out var manual, out var flowError)) return Error(flowError);
             EnsureModelDbInitialized();
 
             Log("Loading save file...");
@@ -509,6 +511,11 @@ public partial class RunSimulator
             var readResult = SaveManager.FromJson<SerializableRun>(saveJson);
             if (!readResult.Success || readResult.SaveData == null)
                 return Error($"Failed to parse save file: {readResult.Status} {readResult.ErrorMessage}");
+
+            if (_runState != null) CleanUp();
+            ResetRunScopedState();
+            ResetManualFlowState();
+            _manualFlow = manual;
 
             var save = readResult.SaveData;
             Log($"Save loaded: seed={save.SerializableRng?.Seed}, act={save.CurrentActIndex}, ascension={save.Ascension}");
@@ -867,6 +874,11 @@ public partial class RunSimulator
             if (_runState == null)
                 return Error("No run in progress");
 
+            var illegal = ValidateAction(action, args);
+            if (illegal != null) return illegal;
+            // The action will change state; its response re-exports the legal set.
+            InvalidateLegal();
+
             var player = _runState.Players[0];
 
             switch (action)
@@ -933,6 +945,14 @@ public partial class RunSimulator
     {
         if (args == null || !args.ContainsKey("col") || !args.ContainsKey("row"))
             return Error("select_map_node requires 'col' and 'row'");
+        var col = Convert.ToInt32(args["col"]);
+        var row = Convert.ToInt32(args["row"]);
+        if (col < 0 || col > byte.MaxValue || row < 0 || row > byte.MaxValue)
+            return Error($"Map coord ({col},{row}) is out of range");
+        var coord = new MapCoord((byte)col, (byte)row);
+        // Check before resetting any room state: a bad coord must not change anything.
+        if (_runState?.Map?.GetPoint(coord) == null)
+            return Error($"No map node at ({col},{row})");
 
         // Reset tracking for new room
         _rewardsProcessed = false;
@@ -942,10 +962,6 @@ public partial class RunSimulator
         _pendingRewards = null;
         _lastKnownHp = player.Creature?.CurrentHp ?? 0;
         ResetRoomFlowState();
-
-        var col = Convert.ToInt32(args["col"]);
-        var row = Convert.ToInt32(args["row"]);
-        var coord = new MapCoord((byte)col, (byte)row);
 
         Log($"Moving to map coord ({col},{row})");
 
@@ -966,6 +982,8 @@ public partial class RunSimulator
     {
         if (args == null || !args.ContainsKey("card_index"))
             return Error("play_card requires 'card_index'");
+        if (HasPendingSelection)
+            return Error("A selection is pending; resolve it before playing a card");
 
         var cardIndex = Convert.ToInt32(args["card_index"]);
         var pcs = player.PlayerCombatState;
@@ -1244,6 +1262,9 @@ public partial class RunSimulator
             if (args == null || !args.ContainsKey("card_index"))
                 return Error("select_card_reward requires 'card_index'");
             var idx = Convert.ToInt32(args["card_index"]);
+            var offered = _cardSelector.PendingRewardCards?.Count ?? 0;
+            if (idx < 0 || idx >= offered)
+                return Error($"card_index {idx} out of range 0..{offered - 1}");
             Log($"Resolving event card reward: index {idx}");
             _cardSelector.ResolveReward(idx);
             if (_manualFlow) return ResumeBackgroundWork();
@@ -1463,6 +1484,8 @@ public partial class RunSimulator
             return Error("select_bundle requires 'bundle_index'");
 
         var idx = Convert.ToInt32(args["bundle_index"]);
+        if (idx < 0 || idx >= _pendingBundles.Count)
+            return Error($"bundle_index {idx} out of range 0..{_pendingBundles.Count - 1}");
         Log($"Bundle selection: pack {idx}");
         var bundles = _pendingBundles;
         var tcs = _pendingBundleTcs;
@@ -1470,7 +1493,7 @@ public partial class RunSimulator
         _pendingBundleTcs = null;
 
         // Set result directly (no ContinueWith/ThreadPool)
-        var selected = (idx >= 0 && idx < bundles.Count) ? bundles[idx] : bundles[0];
+        var selected = bundles[idx];
         tcs.TrySetResult(selected);
         if (_manualFlow) return ResumeBackgroundWork();
 
@@ -1487,10 +1510,14 @@ public partial class RunSimulator
             return Error("select_cards requires 'indices' (comma-separated card indices)");
 
         var indicesStr = args["indices"]?.ToString() ?? "";
-        var indices = indicesStr.Split(',')
-            .Select(s => int.TryParse(s.Trim(), out var v) ? v : -1)
-            .Where(i => i >= 0)
-            .ToArray();
+        if (!TryParseIndices(indicesStr, out var parsed))
+            return Error($"indices '{indicesStr}' must be comma-separated integers");
+        var optionCount = _cardSelector.PendingOptions?.Count ?? 0;
+        if (parsed.Distinct().Count() != parsed.Count || parsed.Any(i => i < 0 || i >= optionCount))
+            return Error($"indices must be distinct and within 0..{optionCount - 1}");
+        if (parsed.Count < _cardSelector.PendingMinSelect || parsed.Count > _cardSelector.PendingMaxSelect)
+            return Error($"select {_cardSelector.PendingMinSelect}–{_cardSelector.PendingMaxSelect} cards, got {parsed.Count}");
+        var indices = parsed.ToArray();
 
         Log($"Card selection: indices [{string.Join(",", indices)}]");
         ResolveSelectionAndResumeTurn(() => _cardSelector.ResolvePendingByIndices(indices));
@@ -1592,15 +1619,16 @@ public partial class RunSimulator
 
     private Dictionary<string, object?> DoSkipSelect(Player player)
     {
-        if (_cardSelector.HasPending)
-        {
-            Log("Skipping card selection");
-            ResolveSelectionAndResumeTurn(() => _cardSelector.CancelPending());
-            SettleCombatActions();
-            if (_manualFlow) return ResumeBackgroundWork();
-            _syncCtx.Pump();
-            WaitForActionExecutor();
-        }
+        if (!_cardSelector.HasPending)
+            return Error("No pending card selection");
+        if (_cardSelector.PendingMinSelect > 0 && !_cardSelector.PendingCancelable)
+            return Error($"This selection requires at least {_cardSelector.PendingMinSelect} card(s)");
+        Log("Skipping card selection");
+        ResolveSelectionAndResumeTurn(() => _cardSelector.CancelPending());
+        SettleCombatActions();
+        if (_manualFlow) return ResumeBackgroundWork();
+        _syncCtx.Pump();
+        WaitForActionExecutor();
         return DetectDecisionPoint();
     }
 
@@ -1608,6 +1636,8 @@ public partial class RunSimulator
     {
         if (args == null || !args.ContainsKey("potion_index"))
             return Error("use_potion requires 'potion_index'");
+        if (HasPendingSelection)
+            return Error("A selection is pending; resolve it before using a potion");
 
         var idx = Convert.ToInt32(args["potion_index"]);
         var potionsList = player.Potions?.ToList() ?? new();
@@ -2025,6 +2055,7 @@ public partial class RunSimulator
                 ["cards"] = opts,
                 ["min_select"] = _cardSelector.PendingMinSelect,
                 ["max_select"] = _cardSelector.PendingMaxSelect,
+                ["cancelable"] = _cardSelector.PendingCancelable,
                 ["player"] = PlayerSummary(player),
             };
         }
@@ -3291,6 +3322,9 @@ public partial class RunSimulator
         // Game logic that touches UI singletons which are null headless (see HeadlessUiPatches).
         HeadlessUiPatches.Apply();
 
+        // Keep what the UI knows about each card selection (cancelable, can skip, prompt).
+        SelectionPrefsPatches.Apply();
+
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
 
@@ -3347,6 +3381,9 @@ public partial class RunSimulator
             Console.Error.WriteLine($"[WARN] ModelIdSerializationCache.Init: {ex.Message}");
         }
     }
+
+    private const int MaxAscension = 10;
+    private static readonly HashSet<string> KnownCharacters = new() { "ironclad", "silent", "defect", "regent", "necrobinder" };
 
     private Player? CreatePlayer(string characterName)
     {
@@ -3529,6 +3566,8 @@ public partial class RunSimulator
         public int PendingMinSelect { get; private set; }
         public int PendingMaxSelect { get; private set; }
         public string PendingPrompt { get; private set; } = "";
+        /// <summary>The UI lets the player back out (Smith, Cook, shop removal): skip_select cancels.</summary>
+        public bool PendingCancelable { get; private set; }
         private TaskCompletionSource<IEnumerable<CardModel>>? _pendingTcs;
 
         public bool HasPending => _pendingTcs != null && !_pendingTcs.Task.IsCompleted;
@@ -3537,17 +3576,25 @@ public partial class RunSimulator
             IEnumerable<CardModel> options, int minSelect, int maxSelect)
         {
             var optList = options.ToList();
+            var info = SelectionPrefsPatches.Take();
             if (optList.Count == 0)
                 return Task.FromResult<IEnumerable<CardModel>>(Array.Empty<CardModel>());
 
-            // If only one option and minSelect requires it, auto-select
-            if (optList.Count == 1 && minSelect >= 1)
+            // Choose-a-card screens always pass (0, 1); the UI only offers Skip when canSkip is set.
+            if (info?.CanSkip == false)
+                minSelect = Math.Max(minSelect, 1);
+            var cancelable = info?.Cancelable ?? false;
+
+            // One option and a pick is required: nothing to decide, unless the UI lets you cancel.
+            if (optList.Count == 1 && minSelect >= 1 && !cancelable)
                 return Task.FromResult<IEnumerable<CardModel>>(optList);
 
             // Store pending selection and wait
             PendingOptions = optList;
             PendingMinSelect = minSelect;
             PendingMaxSelect = maxSelect;
+            PendingCancelable = cancelable;
+            PendingPrompt = info?.PromptKey ?? "";
             _pendingTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
 
             Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}");

@@ -19,8 +19,17 @@ public partial class RunSimulator
     {
         if (result == null || _runState == null) return;
         if (!string.Equals(result.GetValueOrDefault("type") as string, "decision", StringComparison.Ordinal)) return;
-        try { result["legal_actions"] = ComputeLegalActions(result); }
-        catch (Exception ex) { Log($"legal_actions: {ex.Message}"); }
+        try
+        {
+            var legal = ComputeLegalActions(result);
+            result["legal_actions"] = legal;
+            RememberLegal(result.GetValueOrDefault("decision") as string ?? "", legal);
+        }
+        catch (Exception ex)
+        {
+            InvalidateLegal();
+            Log($"legal_actions: {ex.Message}");
+        }
     }
 
     private static Dictionary<string, object?> Act(string action, Dictionary<string, object?>? args = null)
@@ -65,7 +74,8 @@ public partial class RunSimulator
                     ["max_select"] = result.GetValueOrDefault("max_select"),
                     ["num_cards"] = n,
                 });
-                if (result.GetValueOrDefault("min_select") is int min && min == 0)
+                // Skip when nothing is required; on cancelable screens (Smith, shop removal) it cancels.
+                if ((result.GetValueOrDefault("min_select") is int min && min == 0) || Flag(result, "cancelable"))
                     legal.Add(Act("skip_select"));
                 break;
             }
@@ -109,6 +119,9 @@ public partial class RunSimulator
                 foreach (var o in Rows(result, "options"))
                     if (!Flag(o, "is_locked"))
                         legal.Add(Act("choose_option", new() { ["option_index"] = o["index"] }));
+                // Auto flow: an event with nothing left to choose is left like the UI's Proceed.
+                if (!_manualFlow && legal.Count == 0)
+                    legal.Add(Act("leave_room"));
                 break;
 
             case "rest_site":
@@ -117,6 +130,9 @@ public partial class RunSimulator
                         legal.Add(Act("choose_option", new() { ["option_index"] = o["index"] }));
                 if (_manualFlow && Flag(result, "can_proceed"))
                     legal.Add(Act("proceed"));
+                // Auto flow: no usable option (e.g. nothing to upgrade and resting disabled) means leave.
+                if (!_manualFlow && legal.Count == 0)
+                    legal.Add(Act("leave_room"));
                 break;
 
             case "shop":
