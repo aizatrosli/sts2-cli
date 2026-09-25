@@ -40,6 +40,7 @@ Expected: `Completed: 5/5` for every character.
 
 - **Event completion**: trust `localEvent.IsFinished`. Never gate on "option count unchanged after a choice" — events legitimately loop on the same page (Slippery Bridge Hold On) and post-selection continuations (heal/enchant/add-card) often run on the same options page; force-finishing kills them silently.
 - **Async selection continuations**: any path whose effect can open a card_select / card_reward / bundle (event option, shop relic pickup, etc.) must run on `Task.Run(...)` and yield as soon as `_cardSelector.HasPending` / `HasPendingReward` / `_pendingBundles != null` appears. The Task completes naturally once the external `select_cards` feeds the selector's TCS. Reference shape: `DoChooseOption`, `DoBuyRelic`.
+- **Continue saves inside a room**: `select_map_node` snapshots the map state just before entering the node (`CaptureRoomEntryCheckpoint`), tagged with `sts2cli_resume_map_coord`. `write_continue_save` inside that room writes the snapshot; `load_save` strips the tag, restores the map, and re-enters the node, so the same encounter/event comes back (like the game's `LoadIntoLatestMapCoord`). Rooms not entered via the map (debug `enter_room`, act transitions) fall back to the rolled-back map save.
 - **DynamicVar preview during serialization**: `UpdateDynamicVarPreview` mutates the live card. Bracket reads with `ClearPreview` **before and after** — leaving the card in preview state corrupts subsequent play actions (Momentum Strike `PlayCardAction` failure).
 
 ## Protocol notes
