@@ -40,7 +40,10 @@ Then, with the game's Windows data directory (`setup.sh <dir>` in the cloud sess
    issues (`--fail` exits 0).
 3. Phase 3: the game's `GodotSharp.dll` is byte-identical to NuGet `GodotSharp 4.5.1`.
    GodotStubDiff against it compares 519 members with 0 mismatches.
-4. Phase 4: see the result under Phase 4 below.
+4. Phase 4: `scripts/verify_godot_stubs.sh` passes every check. Full runs complete 5/5 for
+   every character. The manual flow completes 5/5 per character with 0 rejected legal
+   actions and no warnings. All 10 seeded trajectories are identical to the `4f53751`
+   build, so the new stubs are not hit in these runs and change no behaviour there.
 
 ---
 
@@ -135,7 +138,7 @@ STS2_GAME_DIR="$G" python3 -m pytest tests/test_godot_stubs.py -q
 Expect 0 mismatches. If the game's build differs from NuGet 4.5.1 (a custom engine build),
 fix the stub to match the game's DLL, not the NuGet one.
 
-## Phase 4: regression gate
+## Phase 4: regression gate — done
 
 1. **Full runs.** The CLAUDE.md loop, 5 runs per character, `Completed: 5/5` each.
 2. **Manual flow.** `python3 python/sts2_env.py 20 <char> --flow manual` for each
