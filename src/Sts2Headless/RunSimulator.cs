@@ -236,7 +236,10 @@ public class RunSimulator
     // letting the player re-pick the node and re-roll the encounter.
     private const string ResumeMapCoordKey = "sts2cli_resume_map_coord";
     private string? _roomEntrySaveJson;
-    private MapCoord _roomEntryCoord;
+    // Plain ints, not MapCoord: a game value-type field would make loading this class pull in
+    // sts2.dll before Program.Main has registered its assembly resolver.
+    private int _roomEntryCol;
+    private int _roomEntryRow;
     private int _roomEntryActIndex;
     private int _roomEntryVisitedCount;
 
@@ -857,7 +860,8 @@ public class RunSimulator
                 ["row"] = (int)coord.row,
             };
             _roomEntrySaveJson = root.ToJsonString();
-            _roomEntryCoord = coord;
+            _roomEntryCol = coord.col;
+            _roomEntryRow = coord.row;
             _roomEntryActIndex = _runState.CurrentActIndex;
             _roomEntryVisitedCount = (_runState.VisitedMapCoords?.Count ?? 0) + 1;
         }
@@ -880,7 +884,7 @@ public class RunSimulator
         if (visited == null || visited.Count != _roomEntryVisitedCount)
             return false;
         var last = visited.Last();
-        return last.col == _roomEntryCoord.col && last.row == _roomEntryCoord.row;
+        return last.col == _roomEntryCol && last.row == _roomEntryRow;
     }
 
     /// <summary>Remove the room-resume tag from a save; returns the save JSON the engine should parse.</summary>
@@ -928,7 +932,7 @@ public class RunSimulator
             }
             else if (TryGetRoomEntryCheckpoint(out var roomEntryJson))
             {
-                Log($"Saving room-entry checkpoint for {currentRoom.GetType().Name} at ({_roomEntryCoord.col},{_roomEntryCoord.row}) (outputPath={outputPath})...");
+                Log($"Saving room-entry checkpoint for {currentRoom.GetType().Name} at ({_roomEntryCol},{_roomEntryRow}) (outputPath={outputPath})...");
                 saveJson = roomEntryJson;
             }
             else
