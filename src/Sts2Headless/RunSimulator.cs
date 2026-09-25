@@ -200,6 +200,20 @@ public partial class RunSimulator
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
+    // Room-entry checkpoint: map-state save taken just before select_map_node enters a room,
+    // tagged with the node being entered. A write_continue_save made inside that room writes
+    // this instead of a rolled-back map save, so load_save re-enters the same node from the
+    // same RNG/encounter state (the game's LoadIntoLatestMapCoord behavior) rather than
+    // letting the player re-pick the node and re-roll the encounter.
+    private const string ResumeMapCoordKey = "sts2cli_resume_map_coord";
+    private string? _roomEntrySaveJson;
+    // Plain ints, not MapCoord: a game value-type field would make loading this class pull in
+    // sts2.dll before Program.Main has registered its assembly resolver.
+    private int _roomEntryCol;
+    private int _roomEntryRow;
+    private int _roomEntryActIndex;
+    private int _roomEntryVisitedCount;
+
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string? flow = null, string? act1 = null)
     {
         try
@@ -458,6 +472,8 @@ public partial class RunSimulator
                     return Error($"Unknown room type: {roomType}");
             }
 
+            // Debug room entry bypasses the map, so no room-entry checkpoint describes it.
+            _roomEntrySaveJson = null;
             RunManager.Instance.EnterRoom(room).GetAwaiter().GetResult();
             _syncCtx.Pump();
             WaitForActionExecutor();
@@ -517,6 +533,9 @@ public partial class RunSimulator
 
             Log("Loading save file...");
 
+            _roomEntrySaveJson = null;
+            saveJson = ExtractResumeMapCoord(saveJson, out var resumeCoord);
+
             if (!ValidateSaveSchemaVersion(saveJson, out var schemaError))
                 return Error($"Save schema mismatch: {schemaError}");
 
@@ -563,8 +582,13 @@ public partial class RunSimulator
                 // should not send the player back through the Ancient start node.
                 if (_runState.CurrentActIndex == 0 && savedVisitedCoords.Count > 0)
                     _runState.ExtraFields.StartedWithNeow = false;
+                // EnterAct (SetActInternal) resets the "?" node odds to base; the save holds the
+                // run's real odds, which decide what the next "?" room (or a resumed one) rolls.
+                var unknownOdds = _runState.Odds.UnknownMapPoint;
+                var savedOdds = (unknownOdds.MonsterOdds, unknownOdds.EliteOdds, unknownOdds.TreasureOdds, unknownOdds.ShopOdds);
                 RunManager.Instance.EnterAct(_runState.CurrentActIndex, doTransition: false).GetAwaiter().GetResult();
                 _syncCtx.Pump();
+                (unknownOdds.MonsterOdds, unknownOdds.EliteOdds, unknownOdds.TreasureOdds, unknownOdds.ShopOdds) = savedOdds;
                 Log($"Entered Act {_runState.CurrentActIndex}");
 
                 if (shouldResumeInitialNeow && _runState.Map?.StartingMapPoint != null)
@@ -585,6 +609,14 @@ public partial class RunSimulator
                     _runState.ActFloor = savedVisitedCoords.Count;
                     var last = savedVisitedCoords[^1];
                     Log($"Restored map position: floor={_runState.ActFloor}, coord=({last.col},{last.row})");
+                }
+
+                // Saved inside a room: re-enter it from its room-entry state so the same
+                // encounter/event comes back, instead of offering the map again.
+                if (resumeCoord.HasValue && !shouldResumeInitialNeow)
+                {
+                    Log($"Resuming room at ({resumeCoord.Value.col},{resumeCoord.Value.row})");
+                    return EnterMapNode(_runState!.Players[0], resumeCoord.Value);
                 }
             }
             else
@@ -830,6 +862,81 @@ public partial class RunSimulator
         return true;
     }
 
+    /// <summary>
+    /// Snapshot the map state right before entering <paramref name="coord"/> (RNG and encounter
+    /// cursors not yet advanced by the room), tagged with the coord to re-enter on load.
+    /// </summary>
+    private void CaptureRoomEntryCheckpoint(MapCoord coord)
+    {
+        _roomEntrySaveJson = null;
+        if (_runState == null) return;
+
+        var currentRoom = _runState.CurrentRoom;
+        if (currentRoom is not MapRoom && currentRoom != null) return;
+
+        try
+        {
+            var saveJson = SaveManager.ToJson(RunManager.Instance.ToSave(currentRoom));
+            var root = System.Text.Json.Nodes.JsonNode.Parse(saveJson)?.AsObject();
+            if (root == null) return;
+            root[ResumeMapCoordKey] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["col"] = (int)coord.col,
+                ["row"] = (int)coord.row,
+            };
+            _roomEntrySaveJson = root.ToJsonString();
+            _roomEntryCol = coord.col;
+            _roomEntryRow = coord.row;
+            _roomEntryActIndex = _runState.CurrentActIndex;
+            _roomEntryVisitedCount = (_runState.VisitedMapCoords?.Count ?? 0) + 1;
+        }
+        catch (Exception ex)
+        {
+            Log($"Room-entry checkpoint skipped: {ex.Message}");
+        }
+    }
+
+    /// <summary>The room-entry checkpoint, if the run is still inside the room it was taken for.</summary>
+    private bool TryGetRoomEntryCheckpoint(out string saveJson)
+    {
+        saveJson = _roomEntrySaveJson ?? "";
+        if (_roomEntrySaveJson == null || _runState == null)
+            return false;
+        if (_runState.CurrentActIndex != _roomEntryActIndex)
+            return false;
+
+        var visited = _runState.VisitedMapCoords;
+        if (visited == null || visited.Count != _roomEntryVisitedCount)
+            return false;
+        var last = visited.Last();
+        return last.col == _roomEntryCol && last.row == _roomEntryRow;
+    }
+
+    /// <summary>Remove the room-resume tag from a save; returns the save JSON the engine should parse.</summary>
+    private static string ExtractResumeMapCoord(string saveJson, out MapCoord? resumeCoord)
+    {
+        resumeCoord = null;
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(saveJson) is not System.Text.Json.Nodes.JsonObject root ||
+                !root.TryGetPropertyValue(ResumeMapCoordKey, out var coordNode))
+                return saveJson;
+
+            if (coordNode is System.Text.Json.Nodes.JsonObject coordObj &&
+                coordObj["col"] is System.Text.Json.Nodes.JsonValue colVal &&
+                coordObj["row"] is System.Text.Json.Nodes.JsonValue rowVal)
+            {
+                resumeCoord = new MapCoord((byte)colVal.GetValue<int>(), (byte)rowVal.GetValue<int>());
+            }
+            root.Remove(ResumeMapCoordKey);
+            return root.ToJsonString();
+        }
+        catch
+        {
+            return saveJson;
+        }
+    }
+
     public Dictionary<string, object?> SaveCheckpoint(string? outputPath)
     {
         try
@@ -841,22 +948,27 @@ public partial class RunSimulator
                 return Error("No output path specified for quit save");
 
             var currentRoom = _runState.CurrentRoom;
-            SerializableRun serializableRun;
+            string saveJson;
 
             if (currentRoom is MapRoom || currentRoom == null)
             {
                 Log($"Saving map checkpoint (room={currentRoom?.GetType().Name ?? "null"}, outputPath={outputPath})...");
-                serializableRun = RunManager.Instance.ToSave(currentRoom);
+                saveJson = SaveManager.ToJson(RunManager.Instance.ToSave(currentRoom));
+            }
+            else if (TryGetRoomEntryCheckpoint(out var roomEntryJson))
+            {
+                Log($"Saving room-entry checkpoint for {currentRoom.GetType().Name} at ({_roomEntryCol},{_roomEntryRow}) (outputPath={outputPath})...");
+                saveJson = roomEntryJson;
             }
             else
             {
                 Log($"Saving pre-room checkpoint from {currentRoom.GetType().Name} (outputPath={outputPath})...");
-                serializableRun = RunManager.Instance.ToSave(new MapRoom());
+                var serializableRun = RunManager.Instance.ToSave(new MapRoom());
                 if (!TryRollbackSerializedSaveToPreRoom(serializableRun, out var rollbackError))
                     return Error($"Cannot save checkpoint: {rollbackError}");
+                saveJson = SaveManager.ToJson(serializableRun);
             }
 
-            var saveJson = SaveManager.ToJson(serializableRun);
             Log($"Serialized save: {saveJson.Length} chars");
 
             var dir = System.IO.Path.GetDirectoryName(outputPath);
@@ -968,7 +1080,12 @@ public partial class RunSimulator
             return Error("No map available");
         if (!TravelablePoints(map).Any(p => p.coord == coord))
             return Error($"Map node ({col},{row}) is not reachable from here");
+        return EnterMapNode(player, coord);
+    }
 
+    /// <summary>Enter a map node the way select_map_node does (shared with load_save room resume).</summary>
+    private Dictionary<string, object?> EnterMapNode(Player player, MapCoord coord)
+    {
         // Reset tracking for new room
         _rewardsProcessed = false;
         _pendingCardReward = null;
@@ -978,11 +1095,13 @@ public partial class RunSimulator
         _lastKnownHp = player.Creature?.CurrentHp ?? 0;
         ResetRoomFlowState();
 
-        Log($"Moving to map coord ({col},{row})");
+        Log($"Moving to map coord ({coord.col},{coord.row})");
 
         // BUG-013: Wait for any pending actions (relic sessions, etc.) to complete before entering new room
         WaitForActionExecutor();
         _syncCtx.Pump();
+
+        CaptureRoomEntryCheckpoint(coord);
 
         // Call EnterMapCoord directly (same as what MoveToMapCoordAction does in TestMode)
         // This avoids the action executor which can swallow errors silently.
@@ -4084,6 +4203,7 @@ public partial class RunSimulator
 
     private void ResetRunScopedState()
     {
+        _roomEntrySaveJson = null; // a checkpoint belongs to the run it was taken in
         _cardSelector.CancelPending();
         _cardSelector.SkipReward();
         _pendingBundleTcs?.TrySetResult(Array.Empty<CardModel>());

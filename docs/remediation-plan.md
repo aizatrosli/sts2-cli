@@ -269,7 +269,8 @@ Notes from Phase 7: the Neow re-offer after `--continue` does not reproduce (a s
 loads to the same map choices; `tests/test_save_load.py`). A different continue gap was
 found: a save written inside a room loads to the map before it, and re-entering the node
 rolls a different encounter, where the game re-enters the last node
-(`RunManager.LoadIntoLatestMapCoord`). Left as a follow-up. The reachable-ui tier lists 2
+(`RunManager.LoadIntoLatestMapCoord`). Fixed afterwards (room-entry checkpoint, merged from
+`claude/dreamy-hypatia-ltijmx`), together with `load_save` resetting the "?" node odds. The reachable-ui tier lists 2
 types and 14 members (e.g. `Line2D.AddPoint(Vector2, int)`, whose stub takes `int?`),
 all behind UI singletons that are null headless; also a follow-up.
 
