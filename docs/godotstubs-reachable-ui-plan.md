@@ -80,6 +80,22 @@ Design (all in `tools/GodotStubAudit/Program.cs`):
 
 Size: M. This phase can be done in a cloud session, since the fixture replaces sts2.dll.
 
+## Phases 2–4 in one command
+
+`scripts/verify_godot_stubs.sh` runs Phases 2–4 below and prints a summary, with logs in
+`logs/godot-stubs-verify/<timestamp>/`:
+
+```bash
+STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2/SlayTheSpire2.app/Contents/Resources/data_sts2_macos_arm64" \
+    scripts/verify_godot_stubs.sh            # --quick: stub checks only
+```
+
+- The trajectory step builds the base revision (`--base`, default `4f53751`) in a temporary
+  git worktree and records with it. Differing runs are reported as `REVIEW`, not `FAIL`: see
+  Phase 4.
+- The full audit listing is saved as `audit-all.log` and `audit.json`. Those two files are
+  the input for fixing anything Phase 2 finds.
+
 ## Phase 2: audit against the real game (needs the game install)
 
 ```bash
