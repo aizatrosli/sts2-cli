@@ -32,7 +32,9 @@ Expected: `Completed: 5/5` for every character.
 - `src/Sts2Headless/Program.cs` — JSON command router
 - `src/GodotStubs/` — replacement GodotSharp.dll (no-op Godot types)
 - `python/play.py` — interactive terminal player
-- `python/play_full_run.py` — batch testing tool
+- `python/play_full_run.py` — batch testing tool (auto flow)
+- `python/sts2_env.py` — Gym-style RL wrapper + manual-flow random-agent test
+- `src/Sts2Headless/RunSimulator.Flow.cs` / `RunSimulator.LegalActions.cs` — manual (UI-faithful) flow, legal action enumeration
 - `lib/` — game DLLs (not in repo, copied by setup.sh)
 - `localization_eng/`, `localization_zhs/` — bilingual loc data
 
@@ -42,7 +44,15 @@ Expected: `Completed: 5/5` for every character.
 - **Async selection continuations**: any path whose effect can open a card_select / card_reward / bundle (event option, shop relic pickup, etc.) must run on `Task.Run(...)` and yield as soon as `_cardSelector.HasPending` / `HasPendingReward` / `_pendingBundles != null` appears. The Task completes naturally once the external `select_cards` feeds the selector's TCS. Reference shape: `DoChooseOption`, `DoBuyRelic`.
 - **DynamicVar preview during serialization**: `UpdateDynamicVarPreview` mutates the live card. Bracket reads with `ClearPreview` **before and after** — leaving the card in preview state corrupts subsequent play actions (Momentum Strike `PlayCardAction` failure).
 
+- **Manual flow** (`"flow": "manual"`, `RunSimulator.Flow.cs`): rewards go through the engine's own `RewardsSet.Offer()` → `RewardsSet.testSelector`, which parks the set as an open rewards screen; claims call `RewardsSetSynchronizer.SelectLocalReward` on `Task.Run` (card rewards block inside it). Room actions that can wait on the player (event options, rest-site options, chest opening, relic pickup) are tracked with `TrackBackground`; after any input resolves, return `ResumeBackgroundWork()` so parked work finishes before the next decision is exported. Keep auto-flow behavior unchanged; gate new behavior on `_manualFlow`.
+- **Selections outside the play phase**: enemy moves can open a card selection mid enemy turn (Knowledge Demon's Curse of Knowledge). `DoEndTurn` must surface it, and resolving it must go through `ResolveSelectionAndResumeTurn` so the enemy turn continues with `SuppressYield`.
+- **Null UI singletons**: `NGame.Instance`, `NEventRoom.Instance`, `NCombatRoom.Instance` etc. are null headless. When game logic dereferences one unguarded (event options, monster death hooks), the option throws halfway and the event loops. Fix it with a targeted Harmony patch (`HeadlessUiPatches.cs` transpilers, or `PatchCosmeticNoOp` for purely visual methods), not a flow special case. Missing GodotStubs members show up as `MissingMethodException` in the turn loop — add them to `src/GodotStubs`.
+- **legal_actions** (`RunSimulator.LegalActions.cs`) is computed from the exported decision and live state. Every entry it lists must be accepted by `ExecuteAction`; `python3 python/sts2_env.py N <char> --flow manual [--god]` reports any rejection.
+
 ## Protocol notes
 
 - `card_select` decision uses key `cards` (not `options`) and action `select_cards` with comma-separated `indices`.
 - `AnyEnemy` cards/potions require `target_index` when ≥2 enemies are alive; with a single alive enemy the adapter auto-targets.
+- `get_state` re-exports the current decision without acting.
+- The Crystal Sphere event's minigame screen is replaced by a `crystal_sphere` decision (`crystal_sphere_divine {x,y,tool}`) in both flows.
+- Manual flow adds decisions `rewards` and `treasure` and actions `claim_reward`, `proceed`, `open_chest`, `pick_relic`, `skip_relic`, `select_card_reward_alternative`. See `docs/transitions.md`.

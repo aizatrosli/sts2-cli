@@ -49,7 +49,29 @@ public struct Vector2I
     public int Y;
     public Vector2I(int x, int y) { X = x; Y = y; }
     public static Vector2I Zero { get; } = new(0, 0);
+    public static Vector2I One { get; } = new(1, 1);
     public static implicit operator Vector2(Vector2I v) => new(v.X, v.Y);
+    public static explicit operator Vector2I(Vector2 v) => new((int)v.X, (int)v.Y);
+
+    // Integer grid math used by game logic (e.g. the Crystal Sphere event grid).
+    public static Vector2I operator +(Vector2I a, Vector2I b) => new(a.X + b.X, a.Y + b.Y);
+    public static Vector2I operator -(Vector2I a, Vector2I b) => new(a.X - b.X, a.Y - b.Y);
+    public static Vector2I operator *(Vector2I a, Vector2I b) => new(a.X * b.X, a.Y * b.Y);
+    public static Vector2I operator *(Vector2I a, int s) => new(a.X * s, a.Y * s);
+    public static Vector2I operator *(int s, Vector2I a) => new(a.X * s, a.Y * s);
+    public static Vector2I operator /(Vector2I a, Vector2I b) => new(a.X / b.X, a.Y / b.Y);
+    public static Vector2I operator /(Vector2I a, int s) => new(a.X / s, a.Y / s);
+    public static bool operator ==(Vector2I a, Vector2I b) => a.X == b.X && a.Y == b.Y;
+    public static bool operator !=(Vector2I a, Vector2I b) => !(a == b);
+    // Godot orders vectors by X, then Y.
+    public static bool operator <(Vector2I a, Vector2I b) => a.X == b.X ? a.Y < b.Y : a.X < b.X;
+    public static bool operator >(Vector2I a, Vector2I b) => a.X == b.X ? a.Y > b.Y : a.X > b.X;
+    public static bool operator <=(Vector2I a, Vector2I b) => a.X == b.X ? a.Y <= b.Y : a.X < b.X;
+    public static bool operator >=(Vector2I a, Vector2I b) => a.X == b.X ? a.Y >= b.Y : a.X > b.X;
+    public float DistanceTo(Vector2I to) => MathF.Sqrt((float)(X - to.X) * (X - to.X) + (float)(Y - to.Y) * (Y - to.Y));
+    public override bool Equals(object? obj) => obj is Vector2I v && v == this;
+    public override int GetHashCode() => HashCode.Combine(X, Y);
+    public override string ToString() => $"({X}, {Y})";
 }
 
 public struct Vector3

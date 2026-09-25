@@ -79,6 +79,18 @@ dotnet run --project src/Sts2Headless/Sts2Headless.csproj
 
 Each command returns a JSON decision point (`map_select` / `combat_play` / `card_reward` / `rest_site` / `event_choice` / `shop` / `game_over`). All names are in English.
 
+### RL / UI-faithful mode
+
+Every decision includes `legal_actions`, a list of ready-to-send action bodies for action masking. Pass `"flow": "manual"` to `start_run` to get the game UI's screen transitions as explicit decisions. That adds a `rewards` screen (`claim_reward` / `proceed`), treasure chests (`open_chest` / `pick_relic` / `skip_relic`), Proceed after rest sites, events and shops, and the boss → next-act transition. `{"cmd": "get_state"}` re-reads the current decision.
+
+```json
+{"cmd": "start_run", "character": "Ironclad", "seed": "test", "flow": "manual"}
+{"cmd": "action", "action": "claim_reward", "args": {"reward_index": 0}}
+{"cmd": "action", "action": "proceed"}
+```
+
+`python/sts2_env.py` wraps this in a Gym-style `reset()` / `step()` API. See [docs/transitions.md](docs/transitions.md) for the full state machine.
+
 ## Game Logs
 
 Every run is automatically logged to `logs/` as a JSONL file (one JSON per line), recording each game state and action with timestamps. Logs older than 7 days are cleaned up automatically.
@@ -202,6 +214,10 @@ dotnet run --project src/Sts2Headless/Sts2Headless.csproj
 ```
 
 每个命令返回一个 JSON decision point（`map_select` / `combat_play` / `card_reward` / `rest_site` / `event_choice` / `shop` / `game_over`），所有名称为英文。
+
+### 强化学习 / 还原界面流程模式
+
+每个 decision 都带有 `legal_actions`（可直接发送的合法动作列表，便于做动作掩码）。在 `start_run` 中传入 `"flow": "manual"`，即可把游戏界面中的所有画面切换变成显式决策：奖励界面（`claim_reward` / `proceed`）、宝箱（`open_chest` / `pick_relic` / `skip_relic`）、休息处/事件/商店后的“继续”、以及击败 Boss 后进入下一幕。`{"cmd": "get_state"}` 可重新读取当前决策。`python/sts2_env.py` 提供 Gym 风格的 `reset()` / `step()` 封装，完整状态机见 [docs/transitions.md](docs/transitions.md)。
 
 ## 游戏日志
 

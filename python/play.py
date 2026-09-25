@@ -1801,6 +1801,38 @@ def play(character="Ironclad", seed=None, auto=False, ascension=0, log=True,
                 state = send({"cmd": "action", "action": "select_bundle",
                              "args": {"bundle_index": int(choice)}})
 
+            elif dec == "crystal_sphere":
+                # Crystal Sphere event minigame: reveal hidden tiles until divinations run out.
+                print(f"\n{'─' * 60}")
+                left = state.get("divinations_left", 0)
+                print(f"  {c(t('How to Divine', '如何占卜'), 'bold')} — "
+                      f"{t(f'{left} Divinations remain', f'还剩下{left}次占卜。')}")
+                grid = state.get("grid", [])
+                symbols = {"?": "·", "": " ", "relic": "R", "potion": "P", "card_reward": "C",
+                           "curse": "X", "gold": "$"}
+                width = len(grid[0]) if grid else 0
+                print("      " + " ".join(f"{x:x}" for x in range(width)))
+                for y, row in enumerate(grid):
+                    print(f"    {y:x} " + " ".join(symbols.get(v, v[:1]) for v in row))
+                hidden = {(x, y) for y, row in enumerate(grid) for x, v in enumerate(row) if v == "?"}
+                if auto:
+                    x, y = sorted(hidden)[0]
+                    tool = "big"
+                else:
+                    print(f"  {t('Big Divination', '大幅占卜')}: x y   "
+                          f"{t('Small Divination', '小幅占卜')}: x y s   (hex)")
+                    while True:
+                        raw = input("> ").strip().lower().split()
+                        try:
+                            x, y = int(raw[0], 16), int(raw[1], 16)
+                            tool = "small" if len(raw) > 2 and raw[2].startswith("s") else "big"
+                        except (ValueError, IndexError):
+                            continue
+                        if (x, y) in hidden:
+                            break
+                state = send({"cmd": "action", "action": "crystal_sphere_divine",
+                              "args": {"x": x, "y": y, "tool": tool}})
+
             elif dec == "card_select":
                 print(f"\n{'─' * 60}")
                 ctx = state.get("context", {})

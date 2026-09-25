@@ -9,6 +9,13 @@ public class CanvasItem : Node
     public virtual void Show() => Visible = true;
     public virtual void Hide() => Visible = false;
     public bool IsVisibleInTree() => Visible;
+    // Method forms of the properties above, called by monster visual hooks (e.g. Crusher, TestSubject).
+    public void SetVisible(bool visible) => Visible = visible;
+    public bool IsVisible() => Visible;
+    public void SetSelfModulate(Color color) => SelfModulate = color;
+    public int ZIndex { get; set; }
+    public bool UseParentMaterial { get; set; }
+    public void MoveToFront() { }
     public Tween CreateTween() => new Tween();
     public Rect2 GetViewportRect() => new Rect2(Vector2.Zero, new Vector2(1920, 1080));
 }

@@ -89,6 +89,7 @@ public class Node : GodotObject
     public bool IsAncestorOf(Node node) => false;
     public bool IsInsideTree() => false;
     public int GetChildCount(bool includeInternal = false) => _children.Count;
+    public int GetIndex(bool includeInternal = false) => _parent?._children.IndexOf(this) ?? -1;
 
     public void CallDeferred(StringName method, params Variant[] args) { }
 

@@ -265,6 +265,13 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
             elif decision == "shop":
                 state = send({"cmd": "action", "action": "leave_room"})
 
+            elif decision == "crystal_sphere":
+                # Crystal Sphere event minigame: divine the first hidden tile
+                grid = state.get("grid", [])
+                x, y = next((x, y) for y, row in enumerate(grid) for x, v in enumerate(row) if v == "?")
+                state = send({"cmd": "action", "action": "crystal_sphere_divine",
+                              "args": {"x": x, "y": y, "tool": "big"}})
+
             elif decision == "unknown":
                 state = send({"cmd": "action", "action": "proceed"})
 

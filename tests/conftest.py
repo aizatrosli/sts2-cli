@@ -42,9 +42,12 @@ class Game:
         self.proc.stdin.flush()
         return self._read()
 
-    def start(self, character="Ironclad", seed="test", ascension=0, lang="en"):
-        return self.send({"cmd": "start_run", "character": character,
-                          "seed": seed, "ascension": ascension, "lang": lang})
+    def start(self, character="Ironclad", seed="test", ascension=0, lang="en", flow=None):
+        cmd = {"cmd": "start_run", "character": character,
+               "seed": seed, "ascension": ascension, "lang": lang}
+        if flow:
+            cmd["flow"] = flow
+        return self.send(cmd)
 
     def act(self, action, **args):
         cmd = {"cmd": "action", "action": action}
