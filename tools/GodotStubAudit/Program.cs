@@ -22,9 +22,10 @@
 //     --json <path>        write the full report as JSON
 //     --reference <path>   the real GodotSharp.dll (e.g. from the game directory): print
 //                          the real declaration of each missing member, and check that
-//                          every enum sts2 uses has the real constant values (sts2 bakes
-//                          enum constants into its IL, so a stub enum with different
-//                          ordinals silently changes game logic)
+//                          every enum sts2 uses has the real underlying type and constant
+//                          values (sts2 bakes enum constants into its IL, so a stub enum
+//                          with different ordinals silently changes game logic, and an
+//                          int-backed stub for a long-backed enum is invalid IL)
 //     --fail               exit 1 when a gameplay gap or enum mismatch exists
 //
 // Matching mirrors the runtime's MemberRef resolution: the referenced type and then its
@@ -163,10 +164,12 @@ internal static class Program
                 if (want == null) continue;
                 var have = stub.EnumValues(t.Name);
                 if (have == null) { enumIssues.Add($"  {t.Name}: not an enum in the stub"); continue; }
-                var diffs = want.Where(kv => !have.TryGetValue(kv.Key, out var v) || v != kv.Value)
+                var diffs = new List<string>();
+                if (real.EnumUnderlyingType(t.Name) is { } wantU && stub.EnumUnderlyingType(t.Name) is { } haveU && wantU != haveU)
+                    diffs.Add($"underlying {haveU} (real {wantU})");
+                diffs.AddRange(want.Where(kv => !have.TryGetValue(kv.Key, out var v) || v != kv.Value)
                     .Select(kv => have.TryGetValue(kv.Key, out var v) ? $"{kv.Key}={v} (real {kv.Value})" : $"{kv.Key} missing (real {kv.Value})")
-                    .Concat(have.Keys.Except(want.Keys).Select(k => $"{k}={have[k]} (not in real)"))
-                    .ToList();
+                    .Concat(have.Keys.Except(want.Keys).Select(k => $"{k}={have[k]} (not in real)")));
                 if (diffs.Count > 0)
                     enumIssues.Add($"  {t.Name} [{TierOfAll(t.Origins).ToString().ToLowerInvariant()}]: {string.Join(", ", diffs.Take(8))}{(diffs.Count > 8 ? $", +{diffs.Count - 8} more" : "")}");
             }

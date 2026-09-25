@@ -179,6 +179,13 @@ internal sealed class StubIndex : IDisposable
         }
     }
 
+    /// <summary>Underlying type of an enum ("System.Int64"), or null if not an enum here.</summary>
+    public string? EnumUnderlyingType(string canonicalName)
+    {
+        var t = FindType(canonicalName);
+        return t is { IsEnum: true } ? Canon(t.GetEnumUnderlyingType()) : null;
+    }
+
     /// <summary>Enum members (name → value) for an enum type, or null if not an enum here.</summary>
     public Dictionary<string, long>? EnumValues(string canonicalName)
     {
