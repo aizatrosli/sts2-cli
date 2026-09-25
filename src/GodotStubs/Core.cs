@@ -256,17 +256,17 @@ public class Node : GodotObject
         return new NodePath("/" + string.Join("/", names));
     }
 
+    // Like Godot, a node that already has a parent is not added again (Godot logs an error).
     public virtual void AddChild(Node child, bool forceReadableName = false, InternalMode @internal = InternalMode.Disabled)
     {
-        child._parent?._children.Remove(child);
+        if (child._parent != null || child == this) return;
         child._parent = this;
         _children.Add(child);
     }
 
     public void AddSibling(Node sibling, bool forceReadableName = false)
     {
-        if (_parent == null) return;
-        sibling._parent?._children.Remove(sibling);
+        if (_parent == null || sibling._parent != null) return;
         sibling._parent = _parent;
         _parent._children.Insert(_parent._children.IndexOf(this) + 1, sibling);
     }

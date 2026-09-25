@@ -112,11 +112,18 @@ internal static class Program
 
         // The case conversions are native in GodotSharp, so check the stub's ports against
         // the examples in Godot's String class reference instead.
-        var se = stub.GetType("Godot.StringExtensions")!;
+        var se = stub.GetType("Godot.StringExtensions") ?? typeof(object);
         foreach (var (method, input, expected) in KnownAnswers)
         {
-            var got = (string)se.GetMethod(method, new[] { typeof(string) })!.Invoke(null, new object[] { input })!;
             compared++;
+            var m = se.GetMethod(method, new[] { typeof(string) });
+            if (m == null)
+            {
+                failed++;
+                Console.WriteLine($"MISSING  Godot.StringExtensions.{method}(String)");
+                continue;
+            }
+            var got = (string?)m.Invoke(null, new object[] { input });
             if (got != expected)
             {
                 failed++;
