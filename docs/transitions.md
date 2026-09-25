@@ -12,6 +12,8 @@ The JSON protocol can run in two **flows**, chosen per run with the `flow` field
 {"cmd": "start_run", "character": "Silent", "seed": "abc", "ascension": 0, "flow": "manual"}
 ```
 
+Any command may carry a `request_id` (number or string); the response echoes it.
+
 `start_run` can be sent again at any time to start a fresh run in the same process (an RL
 `reset`); the previous run is torn down first. A rejected `start_run` (unknown character,
 ascension outside 0–10, bad flow or act1) keeps the current run.
@@ -170,22 +172,41 @@ After a boss, `proceed` on the rewards screen:
 
 ## Python wrapper
 
-`python/sts2_env.py` wraps the protocol in a Gym-style API (no gymnasium dependency):
+`python/sts2_env.py` wraps the protocol in a Gymnasium-style API (no gymnasium dependency):
 
 ```python
+import random
 from sts2_env import Sts2Env
 
-env = Sts2Env(flow="manual")
-obs, info = env.reset(character="Defect", seed="42", ascension=0)
-done = False
-while not done:
-    action = obs["legal_actions"][0]          # or an index: env.step(0)
-    obs, reward, terminated, truncated, info = env.step(action)
-    done = terminated or truncated
-env.close()
+with Sts2Env(character="Defect", flow="manual") as env:
+    obs, info = env.reset(seed=42)                     # seed=None: random, reported in info["seed"]
+    done = False
+    while not done:
+        allowed = [i for i, ok in enumerate(info["action_mask"]) if ok]
+        obs, reward, terminated, truncated, info = env.step(random.choice(allowed))
+        done = terminated or truncated
 ```
 
-The default reward is +1 for victory, -1 for defeat and 0 otherwise. Pass `reward_fn=` to shape it.
+* `reset(seed=None, options=None)`: `options` may set `character`, `ascension`, `act1` and
+  `flow`; the old `reset(character=..., seed=..., ascension=...)` keywords still work. `info`
+  reports `seed`, `character`, `ascension`, `act1`, `flow`, `decision` and `steps`.
+* `info["legal_actions"]` is what `step(i)` indexes (any int, numpy included); an action dict
+  from that list works too. A `select_cards` template is expanded into one entry per valid pick
+  when there are at most `max_expanded` (64) picks, so every one-card choice is one index.
+  Bigger selections become sequential, as in the UI: `pick_card {index}` one card at a time
+  (`info["selected"]` lists the picks), then `confirm_selection`, which is sent automatically
+  once `max_select` cards are picked. `env.select_cards([i, j])` answers any selection at once.
+  `info["action_mask"]` is all true: everything listed can be stepped.
+* A rejected action raises `Sts2Error` and changes nothing. If the engine times out or exits,
+  the env raises `Sts2EnvBroken` until `reset()`, which starts a new engine. Every request
+  carries a `request_id` that the engine echoes, so a late reply is never read as the next one.
+* The engine runs in its own process group; `close()`, the context manager, garbage
+  collection and interpreter exit all end it.
+* `Sts2VecEnv(n, **env_kwargs)` steps `n` engines in parallel and resets finished ones
+  (`info["final_observation"]`, `info["final_info"]`).
+
+The default reward is +1 for victory, -1 for defeat and 0 otherwise. Pass `reward_fn=` to
+replace it, or `shaped_reward(floor=, act=, hp=)` to add progress terms (all off by default).
 Running the module is a random-agent smoke test that uses only `legal_actions`:
 
 ```bash

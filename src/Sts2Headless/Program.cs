@@ -105,9 +105,13 @@ class Program
             if (string.IsNullOrEmpty(line)) continue;
 
             Dictionary<string, object?>? result;
+            object? requestId = null;
             try
             {
                 var cmd = JsonSerializer.Deserialize<JsonElement>(line);
+                // Echoed back so a client can drop a late reply to a request it gave up on.
+                if (cmd.ValueKind == JsonValueKind.Object && cmd.TryGetProperty("request_id", out var rid))
+                    requestId = rid.ValueKind == JsonValueKind.Number && rid.TryGetInt64(out var n) ? n : rid.ToString();
                 // Anything but an action or a read may change state: the next action revalidates
                 // against a fresh legal set (actions refresh it themselves).
                 var cmdName = cmd.TryGetProperty("cmd", out var cn) && cn.ValueKind == JsonValueKind.String ? cn.GetString() : null;
@@ -133,6 +137,7 @@ class Program
 
             if (result != null)
             {
+                if (requestId != null) result["request_id"] = requestId;
                 WriteLine(result);
                 if (result.TryGetValue("type", out var resultTypeObj) &&
                     string.Equals(resultTypeObj as string, "quit_result", StringComparison.Ordinal))

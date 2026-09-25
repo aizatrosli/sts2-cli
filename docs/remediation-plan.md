@@ -240,6 +240,11 @@ throughput matters more than readable text.
 - Tests for the wrapper, including a short god-mode random run per character asserting
   `rejected == 0`.
 
+Result: done (`tests/test_env.py`). Small `select_cards` templates are expanded into
+indexable picks; bigger ones use the sequential mode from the decision table (pick one card
+at a time, then confirm), so every listed action can be stepped by index. The vector env
+uses threads, since each env already runs its own engine process.
+
 ## Phase 7 — tooling, docs, CI, play.py
 
 - `CLAUDE.md`: fix the regression loop (`done`), drop the macOS `STS2_GAME_DIR`, add the

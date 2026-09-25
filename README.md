@@ -87,7 +87,7 @@ Every decision includes `legal_actions`, a list of ready-to-send action bodies f
 
 A run has three acts, as in single player. Act 1 is Overgrowth or Underdocks, rolled from the seed the way the game's lobby does; pass `"act1": "overgrowth"` or `"act1": "underdocks"` to pin it. Act 2 is the Hive and act 3 is Glory. `context.act_id` names the current act.
 
-`python/sts2_env.py` wraps this in a Gym-style `reset()` / `step()` API. See [docs/transitions.md](docs/transitions.md) for the full state machine.
+`python/sts2_env.py` wraps this in a Gymnasium-style `reset()` / `step()` API with action masks, a vectorized env and crash recovery. See [docs/transitions.md](docs/transitions.md) for the full state machine.
 
 ## Game Logs
 
