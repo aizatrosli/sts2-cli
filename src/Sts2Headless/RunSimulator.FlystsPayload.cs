@@ -446,7 +446,8 @@ public partial class RunSimulator
     }
 
     /// <summary>GameState.AddCardCombatPreview: damage_vs per alive enemy and block_now through the
-    /// pure Hook.ModifyDamage / Hook.ModifyBlock.</summary>
+    /// pure Hook.ModifyDamage / Hook.ModifyBlock. Osty attacks (OstyDamageVar, CalculatedDamageVar
+    /// with IsFromOsty) are dealt by Osty, as in the vars' own UpdateCardPreview.</summary>
     private static void FlystsCardCombatPreview(Dictionary<string, object?> entry, CardModel card, Player player)
     {
         try
@@ -455,17 +456,21 @@ public partial class RunSimulator
             if (cs != null)
             {
                 DynamicVar? dmgVar = card.DynamicVars.Values.FirstOrDefault(v => v is CalculatedDamageVar)
+                                     ?? card.DynamicVars.Values.FirstOrDefault(v => v is OstyDamageVar)
                                      ?? card.DynamicVars.Values.FirstOrDefault(v => v is DamageVar);
                 if (dmgVar != null)
                 {
+                    bool fromOsty = dmgVar is OstyDamageVar || (dmgVar is CalculatedDamageVar { IsFromOsty: true });
+                    Creature? dealer = fromOsty ? player.Osty : player.Creature;
                     var perEnemy = new List<int>();
                     foreach (Creature enemy in cs.Enemies.Where(e => e.IsAlive))
                     {
                         decimal baseDmg;
                         ValueProp props;
                         if (dmgVar is CalculatedDamageVar cv) { baseDmg = cv.Calculate(enemy); props = cv.Props; }
+                        else if (dmgVar is OstyDamageVar ov) { baseDmg = ov.BaseValue; props = ov.Props; }
                         else { var dv = (DamageVar)dmgVar; baseDmg = dv.BaseValue; props = dv.Props; }
-                        decimal d = Hook.ModifyDamage(player.RunState, cs, enemy, player.Creature, baseDmg, props, card,
+                        decimal d = Hook.ModifyDamage(player.RunState, cs, enemy, dealer, baseDmg, props, card,
                             ModifyDamageHookType.All, CardPreviewMode.Normal, out IEnumerable<AbstractModel> _);
                         perEnemy.Add((int)Math.Max(d, 0m));
                     }

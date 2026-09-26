@@ -27,12 +27,19 @@ this mode is always a manual-flow run, and every engine step still goes through
 - A refused action returns `status: error` with the mod's error text and changes nothing.
 - `{"cmd":"content_catalog","profile":"<progress.save>"}` (no run needed; with `profile`, no run in progress): every card,
   relic, potion (with pool, rarity and, given a profile, `unlocked` for a singleplayer run from
-  it), event (per act / shared / ancient), encounter, monster and power in ModelDb. flysts's
-  `tools/cli_coverage.py` uses it as the coverage denominator.
-- The debug commands (`enter_room`, `set_player`, `set_draw_order`; engine `--debug`) work in
-  this mode: the payload re-reads the decision after them. A failing one returns its own error
-  (unknown encounter, event, relic, card or potion) and changes nothing: `set_player` resolves
-  every id before it touches the player.
+  it), event (per act / shared / ancient, `conditional` when it overrides `IsAllowed`, and given
+  a profile `unlocked`: its act is unlocked and no unrevealed Event1-3 epoch holds it back, or
+  for an Ancient, an unlocked act offers it), encounter, monster, power, and the non-mock
+  enchantments and afflictions in ModelDb. flysts's `tools/cli_coverage.py` uses it as the
+  coverage denominator.
+- The debug commands (`enter_room`, `set_player`, `set_draw_order`, `enter_ancient`,
+  `obtain_relic`, `add_card`; engine `--debug`) work in this mode: the payload re-reads the
+  decision after them. A failing one returns its own error (unknown encounter, event, relic,
+  card or potion) and changes nothing: `set_player` resolves every id before it touches the
+  player. The last three are the game's dev console commands `ancient <id> [choice]`
+  (AncientEventModel.DebugOption forces option 0, act filters aside), `relic add <id>`
+  (RelicCmd.Obtain: the pickup runs, unlike `set_player`'s silent add) and `card <id> [pile]`,
+  so flysts's `tools/live_capture.py` runs the same steps on the game and the engine.
 
 ## Run creation (FlystsProfile, `RunSimulator.Flysts.cs`)
 
@@ -60,7 +67,8 @@ Built the way the game builds a new run for that profile (`NGame.StartNewSinglep
 
 A port of the mod's model reads: ids are `Id.Entry` (`STRIKE_IRONCLAD`), enums lower-case,
 `run.floor` is `TotalFloor`, intent `value` is the total damage, `damage_vs`/`block_now` go
-through `Hook.ModifyDamage`/`Hook.ModifyBlock`, `run_state` is the lite pruned save
+through `Hook.ModifyDamage`/`Hook.ModifyBlock` (an Osty attack, `OstyDamageVar` or
+`CalculatedDamageVar.FromOsty`, with Osty as the dealer, like its card preview), `run_state` is the lite pruned save
 (`GameState.PruneRunState`). Values the mod read off UI nodes are the value a settled live read
 shows:
 

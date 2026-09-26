@@ -48,7 +48,7 @@ class Program
     const int SchemaVersion = 2;
 
     /// <summary>
-    /// Debug commands (set_player, enter_room, set_draw_order) edit the game state. They share the
+    /// Debug commands (set_player, enter_room, enter_ancient, obtain_relic, add_card, set_draw_order) edit the game state. They share the
     /// channel an agent acts on, so they are only accepted when the engine is started with --debug
     /// (or STS2_DEBUG_COMMANDS=1): an RL agent cannot reach them by accident.
     /// </summary>
@@ -151,7 +151,7 @@ class Program
     static Dictionary<string, object?>? HandleCommand(RunSimulator sim, JsonElement cmd)
     {
         var cmdType = cmd.GetProperty("cmd").GetString() ?? "";
-        if (cmdType is "set_player" or "enter_room" or "set_draw_order" && !DebugCommands)
+        if (cmdType is "set_player" or "enter_room" or "set_draw_order" or "enter_ancient" or "obtain_relic" or "add_card" && !DebugCommands)
             return new Dictionary<string, object?>
             {
                 ["type"] = "error",
@@ -259,6 +259,29 @@ class Program
                 var eventId = cmd.TryGetProperty("event", out var ev) ? ev.GetString() : null;
                 var entered = sim.EnterRoom(roomType, encounter, eventId);
                 return IsError(entered) ? entered : sim.FlystsRefreshAfterDebug() ?? entered;
+            }
+
+            case "enter_ancient":
+            {
+                var eventId = cmd.TryGetProperty("event", out var ev) ? ev.GetString() : null;
+                var option = cmd.TryGetProperty("option", out var opt) ? opt.GetString() : null;
+                var entered = sim.EnterAncient(eventId, option);
+                return IsError(entered) ? entered : sim.FlystsRefreshAfterDebug() ?? entered;
+            }
+
+            case "obtain_relic":
+            {
+                var relicId = cmd.TryGetProperty("relic", out var rel) ? rel.GetString() : null;
+                var obtained = sim.ObtainRelic(relicId);
+                return IsError(obtained) ? obtained : sim.FlystsRefreshAfterDebug() ?? obtained;
+            }
+
+            case "add_card":
+            {
+                var cardId = cmd.TryGetProperty("card", out var cd) ? cd.GetString() : null;
+                var pileName = cmd.TryGetProperty("pile", out var pl) ? pl.GetString() : null;
+                var added = sim.AddCard(cardId, pileName);
+                return IsError(added) ? added : sim.FlystsRefreshAfterDebug() ?? added;
             }
 
             case "set_draw_order":

@@ -136,7 +136,8 @@ star icons written `[E]` and `[star]`.
 * **`context`**: `act`, `act_id`, `act_name`, `floor`, `total_floor`, `room_type`, `seed`,
   `character`, `ascension`, `flow`, `boss` and `second_boss`. `map_select` embeds the full `map`.
 
-Debug commands (`set_player`, `enter_room`, `set_draw_order`) are accepted only when the engine
+Debug commands (`set_player`, `enter_room`, `set_draw_order`, `enter_ancient`, `obtain_relic`,
+`add_card`) are accepted only when the engine
 starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.
 
 ### Rewards screen details

@@ -14,8 +14,8 @@ PROFILE = os.environ.get("FLYSTS_PROFILE") or os.path.expanduser(
 pytestmark = pytest.mark.skipif(not os.path.isfile(PROFILE), reason=f"no save profile at {PROFILE}")
 
 
-def start(game, seed="FLYS1", mode="custom"):
-    cmd = {"cmd": "start_run", "payload": "flysts", "character": "Ironclad", "game_mode": mode, "profile": PROFILE}
+def start(game, seed="FLYS1", mode="custom", character="Ironclad"):
+    cmd = {"cmd": "start_run", "payload": "flysts", "character": character, "game_mode": mode, "profile": PROFILE}
     if seed:
         cmd["seed"] = seed
     return game.send(cmd)
@@ -167,6 +167,26 @@ def test_content_catalog(game):
     assert "NUTRITIOUS_OYSTER" in {r["id"] for r in cat["relics"]}
     assert "NEOW" in {e["id"] for e in cat["events"]}
     assert all({"id", "act", "room_type"} <= set(e) for e in cat["encounters"])
+    assert "SHARP" in cat["enchantments"] and "HEXED" in cat["afflictions"]
+    assert not [x for x in cat["enchantments"] + cat["afflictions"] if x.startswith("MOCK")]
+    events = {e["id"]: e for e in cat["events"]}
+    assert events["FAKE_MERCHANT"]["conditional"] and not events["NEOW"]["conditional"]
+
+
+def test_content_catalog_event_unlocks_follow_the_profile(game, tmp_path):
+    """Darv is a shared Ancient behind DARV_EPOCH (UnlockState.SharedAncients), Trash Heap an
+    Event1Epoch event (ActModel.GenerateRooms)."""
+    import json
+    progress = json.load(open(PROFILE))
+    for e in progress["epochs"]:
+        if e["id"] in ("DARV_EPOCH", "EVENT1_EPOCH"):
+            e["state"] = "not_obtained"
+    locked = tmp_path / "progress.save"
+    locked.write_text(json.dumps(progress))
+    cat = game.send({"cmd": "content_catalog", "profile": str(locked)})
+    events = {e["id"]: e["unlocked"] for e in cat["events"]}
+    assert events["DARV"] is False and events["TRASH_HEAP"] is False
+    assert events["OROBAS"] is True and events["NEOW"] is True
 
 
 def test_fake_merchant_lists_no_options(game):
@@ -306,3 +326,97 @@ def test_debug_commands_report_their_errors_and_change_nothing(game):
         r = game.send(cmd)
         assert r["type"] == "error" and "Unknown" in r["message"], (cmd, r)
     assert game.send({"cmd": "flysts_state"})["state"] == before
+
+
+OSTY_CARDS = ["POKE", "UNLEASH", "SNAP", "PROTECTOR", "SQUEEZE"]
+
+
+def _osty_hand(game, relics):
+    start(game, character="Necrobinder")
+    game.send({"cmd": "set_player", "relics": relics, "deck": OSTY_CARDS})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert len(state["monsters"]) == 1
+    return state, {c["id"]: c for c in state["player"]["hand"]}
+
+
+def test_osty_attacks_are_dealt_by_osty(game):
+    """An Osty attack's damage_vs has Osty as the dealer (OstyDamageVar / CalculatedDamageVar
+    FromOsty UpdateCardPreview): the player's Strength (Brimstone) doesn't count, and against a
+    single enemy with no damage-taken modifiers it equals the card's own preview value."""
+    plain_state, plain = _osty_hand(game, ["BOUND_PHYLACTERY"])
+    strong_state, strong = _osty_hand(game, ["BOUND_PHYLACTERY", "BRIMSTONE"])
+    assert ("STRENGTH_POWER", 2) in _combat_view(strong_state)[0]
+    assert set(plain) == set(OSTY_CARDS)
+    for cid in OSTY_CARDS:
+        card = strong[cid]
+        preview = card["vars"].get("calculateddamage", card["vars"].get("ostydamage"))
+        assert card["damage_vs"] == [preview] == plain[cid]["damage_vs"], (cid, card, plain[cid])
+    assert strong["POKE"]["damage_vs"] == [6]
+
+
+def test_osty_attacks_without_osty(game):
+    """No Osty in combat (no Bound Phylactery): the preview still runs, dealer null, like the game."""
+    _, hand = _osty_hand(game, [])
+    for cid in OSTY_CARDS:
+        assert isinstance(hand[cid].get("damage_vs"), list), (cid, hand[cid])
+
+
+def _relics(state):
+    return [r["id"] for r in state["player"]["relics"]]
+
+
+def test_enter_ancient_forces_an_option_like_the_console(game):
+    """`enter_ancient` is the game's `ancient <id> <choice>` console command (DebugOption: option 0
+    becomes the first possible option whose text key contains the choice, act filters aside)."""
+    start(game)
+    r = game.send({"cmd": "enter_ancient", "event": "DARV", "option": "VELVET_CHOKER"})
+    assert r["state"]["event_id"] == "DARV" and r["state"]["options"][0]["relic"] == "VELVET_CHOKER"
+    r = game.send({"cmd": "enter_ancient", "event": "DARV", "option": "NOPE"})
+    assert r["type"] == "error" and r["message"] == "Invalid ancient option for DARV: NOPE"
+    assert game.send({"cmd": "enter_ancient", "event": "TRIAL"})["type"] == "error"  # not an Ancient
+
+
+def test_touch_of_orobas_upgrades_the_starter_then_gives_circlet(game):
+    """TouchOfOrobas.cs: Burning Blood -> Black Blood; a second Touch finds no mapping for a
+    starter that is already upgraded and gives Circlet."""
+    start(game)
+    game.send({"cmd": "enter_ancient", "event": "OROBAS", "option": "TOUCH_OF_OROBAS"})
+    state = act(game, "choose_event_option", index=0)["state"]
+    assert "BLACK_BLOOD" in _relics(state) and "BURNING_BLOOD" not in _relics(state)
+    game.send({"cmd": "enter_ancient", "event": "OROBAS", "option": "TOUCH_OF_OROBAS"})
+    state = act(game, "choose_event_option", index=0)["state"]
+    assert "CIRCLET" in _relics(state) and "BLACK_BLOOD" not in _relics(state)
+
+
+def test_obtain_relic_runs_its_pickup(game):
+    """`obtain_relic` is `relic add` (RelicCmd.Obtain): Astrolabe's pickup opens its transform."""
+    start(game)
+    r = game.send({"cmd": "obtain_relic", "relic": "ASTROLABE"})
+    assert r["state"]["state_type"] == "deck_transform" and "ASTROLABE" in _relics(r["state"])
+    assert game.send({"cmd": "obtain_relic", "relic": "NOT_A_RELIC"})["message"] == "Unknown relic: NOT_A_RELIC"
+
+
+def test_wongo_badge_at_2000_profile_points(game, tmp_path):
+    """WelcomeToWongos.CheckObtainWongoBadge: a buy that takes the profile's points to 2000."""
+    import json
+    progress = json.load(open(PROFILE))
+    progress["wongo_points"] = 1999
+    prof = tmp_path / "progress.save"
+    prof.write_text(json.dumps(progress))
+    game.send({"cmd": "start_run", "payload": "flysts", "character": "Ironclad", "seed": "WONGO1",
+               "game_mode": "custom", "profile": str(prof)})
+    game.send({"cmd": "set_player", "gold": 300})
+    state = game.send({"cmd": "enter_room", "type": "event", "event": "WELCOME_TO_WONGOS"})["state"]
+    idx = [o["text_key"].split(".")[-1] for o in state["options"]].index("BARGAIN_BIN")
+    state = act(game, "choose_event_option", index=idx)["state"]
+    assert "WONGO_CUSTOMER_APPRECIATION_BADGE" in _relics(state)
+
+
+def test_add_card_is_the_card_console_command(game):
+    start(game, character="Necrobinder")
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+    r = game.send({"cmd": "add_card", "card": "POKE"})
+    assert r["state"]["player"]["hand"][-1]["id"] == "POKE" and r["state"]["player"]["hand"][-1]["damage_vs"]
+    assert game.send({"cmd": "add_card", "card": "POKE", "pile": "Nowhere"})["type"] == "error"
+    assert game.send({"cmd": "add_card", "card": "NOT_A_CARD"})["message"] == "Unknown card: NOT_A_CARD"

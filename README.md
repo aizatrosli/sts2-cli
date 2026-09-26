@@ -94,6 +94,9 @@ start, then answers each command line with one JSON line. All names are in Engli
 | `set_player` * | `hp`, `max_hp`, `gold`, `deck`, `relics`, `potions` (ids) | `ok` |
 | `enter_room` * | `type` (`monster`/`combat`, `elite`, `event`, `rest`, `shop`, `treasure`), `encounter`, `event` | decision in that room |
 | `set_draw_order` * | `cards` (ids, top first) | `ok` |
+| `enter_ancient` * | `event` (an Ancient), `option` (forces option 0, like the console's `ancient`) | decision in that event |
+| `obtain_relic` * | `relic` (id; its pickup runs, like the console's `relic add`) | decision after the pickup |
+| `add_card` * | `card` (id), `pile` (default `Hand`, like the console's `card`) | decision |
 
 \* Debug commands, accepted only when the engine starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.
 Any command may carry a `request_id`, which the response echoes.

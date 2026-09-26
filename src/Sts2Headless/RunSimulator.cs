@@ -503,6 +503,83 @@ public partial class RunSimulator
         catch (Exception ex) { return ErrorWithTrace("EnterRoom failed", ex); }
     }
 
+    /// <summary>Debug `enter_ancient {event, option?}`: the game's `ancient` console command
+    /// (AncientConsoleCmd): the Ancient's room with AncientEventModel.DebugOption forcing
+    /// option 0 to the first of its AllPossibleOptions whose text key contains `option` (act
+    /// filters don't apply), and an Ancient map-point history entry.</summary>
+    public Dictionary<string, object?> EnterAncient(string? eventId, string? option)
+    {
+        try
+        {
+            if (_runState == null) return Error("No run in progress");
+            if (string.IsNullOrEmpty(eventId)) return Error("enter_ancient requires 'event' (e.g. DARV)");
+            if (ModelDb.GetByIdOrNull<EventModel>(new ModelId("EVENT", eventId.ToUpperInvariant())) is not AncientEventModel ancient)
+                return Error($"Unknown ancient: {eventId}");
+            string? choice = string.IsNullOrEmpty(option) ? null : option.ToUpperInvariant();
+            if (choice != null && !ancient.AllPossibleOptions.Any(o => o.TextKey.Contains(choice)))
+                return Error($"Invalid ancient option for {ancient.Id.Entry}: {option}");
+            Log($"EnterAncient: {ancient.Id.Entry} option={choice}");
+            var room = new EventRoom(ancient) { OnStart = e => ((AncientEventModel)e).DebugOption = choice };
+            _runState.AppendToMapPointHistory(MapPointType.Ancient, RoomType.Event, ancient.Id);
+            _roomEntrySaveJson = null;
+            RunManager.Instance.EnterRoom(room).GetAwaiter().GetResult();
+            _syncCtx.Pump();
+            WaitForActionExecutor();
+            return DetectDecisionPoint();
+        }
+        catch (Exception ex) { return ErrorWithTrace("EnterAncient failed", ex); }
+    }
+
+    /// <summary>Debug `obtain_relic {relic}`: the game's `relic add` console command
+    /// (RelicCmd.Obtain, so AfterObtained runs, unlike set_player). The pickup can open a
+    /// selection (Astrolabe, Pandora's Box, ...): it runs on Task.Run and yields on it.</summary>
+    public Dictionary<string, object?> ObtainRelic(string? relicId)
+    {
+        try
+        {
+            if (_runState == null) return Error("No run in progress");
+            if (string.IsNullOrEmpty(relicId)) return Error("obtain_relic requires 'relic'");
+            var relic = ModelDb.GetByIdOrNull<RelicModel>(new ModelId("RELIC", relicId.ToUpperInvariant()));
+            if (relic == null) return Error($"Unknown relic: {relicId}");
+            var player = _runState.Players[0];
+            Log($"ObtainRelic: {relic.Id.Entry}");
+            var task = Task.Run(() => RelicCmd.Obtain(relic.ToMutable(), player));
+            if (_manualFlow) TrackBackground(task);
+            WaitForTaskOrPending(task);
+            if (task.IsFaulted) return Error($"obtain_relic failed: {task.Exception!.GetBaseException().Message}");
+            return DetectDecisionPoint();
+        }
+        catch (Exception ex) { return ErrorWithTrace("ObtainRelic failed", ex); }
+    }
+
+    /// <summary>Debug `add_card {card, pile?}`: the game's `card <id> [pile]` console command
+    /// (CardConsoleCmd): a new card created in the combat's (combat piles) or the run's scope,
+    /// added through CardPileCmd.Add; the hand by default, refused when full.</summary>
+    public Dictionary<string, object?> AddCard(string? cardId, string? pileName)
+    {
+        try
+        {
+            if (_runState == null) return Error("No run in progress");
+            var pile = PileType.Hand;
+            if (!string.IsNullOrEmpty(pileName) && !Enum.TryParse(pileName, true, out pile))
+                return Error($"Unknown pile '{pileName}'. Valid piles: {string.Join(", ", Enum.GetNames<PileType>())}");
+            var player = _runState.Players[0];
+            if (pile == PileType.Hand && pile.GetPile(player).Cards.Count >= CardPile.MaxCardsInHand)
+                return Error($"The hand is full ({pile.GetPile(player).Cards.Count}/{CardPile.MaxCardsInHand}).");
+            var name = (cardId ?? "").ToUpperInvariant();
+            var canonical = ModelDb.AllCards.FirstOrDefault(c => c.Id.Entry == name);
+            if (canonical == null) return Error($"Unknown card: {cardId}");
+            ICardScope? scope = pile.IsCombatPile() ? CombatManager.Instance.DebugOnlyGetState() : _runState;
+            if (scope == null) return Error("Not in combat");
+            var card = scope.CreateCard(canonical, player);
+            var task = Task.Run(() => MegaCrit.Sts2.Core.Commands.CardPileCmd.Add(card, pile));
+            WaitForTaskOrPending(task);
+            if (task.IsFaulted) return Error($"add_card failed: {task.Exception!.GetBaseException().Message}");
+            return DetectDecisionPoint();
+        }
+        catch (Exception ex) { return ErrorWithTrace("AddCard failed", ex); }
+    }
+
     public Dictionary<string, object?> SetDrawOrder(List<string> cardIds)
     {
         try
