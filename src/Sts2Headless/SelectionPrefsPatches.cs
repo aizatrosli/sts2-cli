@@ -14,7 +14,19 @@ namespace Sts2Headless;
 /// </summary>
 internal static class SelectionPrefsPatches
 {
-    internal sealed record Info(string Source, bool Cancelable, bool? CanSkip, string? Prompt);
+    internal sealed record Info(string Source, bool Cancelable, bool? CanSkip, string? Prompt)
+    {
+        // What the UI screen is given beyond the (options, min, max) the selector hook sees; the
+        // flysts payload reports it the way the mod read it off the screen (prefs, enchantment).
+        public string? PromptKey { get; init; }
+        public string? PromptFormatted { get; init; }
+        public int? MinSelect { get; init; }
+        public int? MaxSelect { get; init; }
+        public bool RequireManualConfirmation { get; init; }
+        public MegaCrit.Sts2.Core.Models.EnchantmentModel? Enchantment { get; init; }
+        public int? EnchantmentAmount { get; init; }
+        public MegaCrit.Sts2.Core.Entities.Cards.PileType? PileType { get; init; }
+    }
 
     private static Info? _next;
 
@@ -48,23 +60,54 @@ internal static class SelectionPrefsPatches
     {
         bool cancelable = false;
         bool? canSkip = null;
-        string? prompt = null;
+        string? prompt = null, promptKey = null, promptFormatted = null;
+        int? min = null, max = null, enchantmentAmount = null;
+        bool requireManual = false;
+        MegaCrit.Sts2.Core.Models.EnchantmentModel? enchantment = null;
+        MegaCrit.Sts2.Core.Entities.Cards.PileType? pileType = null;
         var parameters = __originalMethod.GetParameters();
         for (int i = 0; i < parameters.Length && i < __args.Length; i++)
         {
             if (__args[i] is CardSelectorPrefs prefs)
             {
                 cancelable = prefs.Cancelable;
+                min = prefs.MinSelect;
+                max = prefs.MaxSelect;
+                requireManual = prefs.RequireManualConfirmation;
+                promptKey = prefs.Prompt?.LocEntryKey;
                 // Formatted now: the prompt carries its own variables (Amount, MinCount, MaxCount).
-                try { prompt = RunSimulator.CleanText(prefs.Prompt?.GetFormattedText()); }
-                catch { prompt = prefs.Prompt?.LocEntryKey; }
+                try { promptFormatted = prefs.Prompt?.GetFormattedText(); } catch { }
+                try { prompt = RunSimulator.CleanText(promptFormatted); }
+                catch { prompt = promptKey; }
             }
             else if (parameters[i].Name == "canSkip" && __args[i] is bool b)
             {
                 canSkip = b;
             }
+            else if (__args[i] is MegaCrit.Sts2.Core.Models.EnchantmentModel e)
+            {
+                enchantment = e;
+            }
+            else if (parameters[i].Name == "amount" && __args[i] is int amount)
+            {
+                enchantmentAmount = amount;
+            }
+            else if (__args[i] is MegaCrit.Sts2.Core.Entities.Cards.CardPile pile)
+            {
+                pileType = pile.Type;
+            }
         }
         var source = __originalMethod.Name.StartsWith("From", StringComparison.Ordinal) ? __originalMethod.Name[4..] : __originalMethod.Name;
-        _next = new Info(source, cancelable, canSkip, string.IsNullOrWhiteSpace(prompt) ? null : prompt);
+        _next = new Info(source, cancelable, canSkip, string.IsNullOrWhiteSpace(prompt) ? null : prompt)
+        {
+            PromptKey = promptKey,
+            PromptFormatted = promptFormatted,
+            MinSelect = min,
+            MaxSelect = max,
+            RequireManualConfirmation = requireManual,
+            Enchantment = enchantment,
+            EnchantmentAmount = enchantmentAmount,
+            PileType = pileType,
+        };
     }
 }

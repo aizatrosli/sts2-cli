@@ -5,6 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RollForward>LatestMajor</RollForward>
+    <!-- Harmony patches detour the JIT-compiled code of the originals. With tiered compilation
+         the runtime recompiles hot methods at tier 1 in the background, and a recompiled
+         original can drop its detour: in a long engine process a patched method
+         (MerchantPotionEntry.CalcCost's real-game price roll) intermittently ran unpatched.
+         Compile each method once, fully optimized. -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
   <ItemGroup>

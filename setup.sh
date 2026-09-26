@@ -75,6 +75,9 @@ DLLS=(
 
 echo ""
 echo "📦 Copying DLLs to lib/..."
+# DLLs this game build does not ship (e.g. Sentry.Godot.dll before v0.111), so play.py does not
+# re-run setup for them on every launch.
+: > lib/.not_shipped
 for dll in "${DLLS[@]}"; do
     src="$GAME_DIR/$dll"
     if [ -f "$src" ]; then
@@ -88,7 +91,8 @@ for dll in "${DLLS[@]}"; do
             cp "$found" "lib/$dll"
             echo "    → found at $found"
         else
-            echo "    ⚠ Skipped (may cause build errors)"
+            echo "    ⚠ Skipped (not shipped by this game build)"
+            echo "$dll" >> lib/.not_shipped
         fi
     fi
 done

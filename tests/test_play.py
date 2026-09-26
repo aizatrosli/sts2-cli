@@ -54,6 +54,7 @@ def test_setup_repairs_missing_module_dependency(monkeypatch):
     # Every other DLL is present (also when lib/ is empty, e.g. in CI).
     monkeypatch.setattr(os.path, "isfile", lambda path: path != dependency and (
         isfile(path) or os.path.dirname(path) == play.LIB_DIR))
+    monkeypatch.setattr(play, "_not_shipped", set)  # a game build that ships the dependency
     monkeypatch.setattr(play, "_find_game_dir", lambda: "/test/steam/data")
     monkeypatch.setattr(play, "_build", lambda: True)  # the build step is not under test
     getmtime = os.path.getmtime

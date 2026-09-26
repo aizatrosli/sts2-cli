@@ -115,7 +115,7 @@ class Program
                 // Anything but an action or a read may change state: the next action revalidates
                 // against a fresh legal set (actions refresh it themselves).
                 var cmdName = cmd.TryGetProperty("cmd", out var cn) && cn.ValueKind == JsonValueKind.String ? cn.GetString() : null;
-                if (cmdName is not ("action" or "get_map")) sim.InvalidateLegal();
+                if (cmdName is not ("action" or "get_map" or "flysts_state" or "flysts_action")) sim.InvalidateLegal();
                 if (cmdName is "start_run" or "load_save") PatchReport.DrainEngineWarnings(); // belong to the old run
                 result = HandleCommand(sim, cmd);
                 sim.AttachLegalActions(result);
@@ -159,6 +159,35 @@ class Program
             };
         switch (cmdType)
         {
+            case "start_run" when cmd.TryGetProperty("payload", out var payload) && payload.GetString() == "flysts":
+                // The FlystsBridge mod's payload and actions (flysts_state / flysts_action).
+                return sim.StartFlystsRun(
+                    cmd.TryGetProperty("character", out var fch) ? fch.GetString() ?? "Ironclad" : "Ironclad",
+                    cmd.TryGetProperty("ascension", out var fasc) ? fasc.GetInt32() : 0,
+                    cmd.TryGetProperty("seed", out var fs) ? fs.GetString() : null,
+                    cmd.TryGetProperty("game_mode", out var fgm) ? fgm.GetString() : null,
+                    cmd.TryGetProperty("profile", out var fpr) ? fpr.GetString() : null);
+
+            case "flysts_state":
+                return sim.FlystsGetState();
+
+            case "flysts_action":
+            {
+                var faction = cmd.TryGetProperty("action", out var fa) ? fa.GetString() ?? "" : "";
+                var fargs = new Dictionary<string, object?>();
+                if (cmd.TryGetProperty("args", out var fargsElem) && fargsElem.ValueKind == JsonValueKind.Object)
+                    foreach (var prop in fargsElem.EnumerateObject())
+                        fargs[prop.Name] = prop.Value.ValueKind switch
+                        {
+                            JsonValueKind.Number => prop.Value.GetInt32(),
+                            JsonValueKind.String => prop.Value.GetString(),
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => prop.Value.ToString(),
+                        };
+                return sim.FlystsAction(faction, fargs);
+            }
+
             case "start_run":
                 return sim.StartRun(
                     cmd.TryGetProperty("character", out var ch) ? ch.GetString() ?? "Ironclad" : "Ironclad",

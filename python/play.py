@@ -123,6 +123,22 @@ def _build():
     return r.returncode == 0
 
 
+def _dependency_missing(dll):
+    """True when lib/ lacks a DLL that the game build ships (setup.sh lists the rest)."""
+    if os.path.isfile(os.path.join(LIB_DIR, dll)):
+        return False
+    return dll not in _not_shipped()
+
+
+def _not_shipped():
+    """DLLs setup.sh found missing from this game build (lib/.not_shipped)."""
+    try:
+        with open(os.path.join(LIB_DIR, ".not_shipped")) as f:
+            return set(f.read().split())
+    except OSError:
+        return set()
+
+
 def ensure_setup():
     """Check that everything is ready to run. Auto-setup if needed."""
 
@@ -132,9 +148,9 @@ def ensure_setup():
         print("   Install .NET 9+ from https://dotnet.microsoft.com/download")
         sys.exit(1)
 
-    # Check lib/sts2.dll exists
+    # Check lib/sts2.dll exists (Sentry.Godot.dll too, unless setup found this build lacks it)
     sts2_dll = os.path.join(LIB_DIR, "sts2.dll")
-    if not os.path.isfile(sts2_dll) or not os.path.isfile(os.path.join(LIB_DIR, "Sentry.Godot.dll")):
+    if not os.path.isfile(sts2_dll) or _dependency_missing("Sentry.Godot.dll"):
         print("📦 Game DLLs missing. Running setup...")
         game_dir = _find_game_dir()
         if not game_dir:

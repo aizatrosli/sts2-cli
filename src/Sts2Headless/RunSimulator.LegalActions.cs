@@ -197,7 +197,7 @@ public partial class RunSimulator
             }
         }
 
-        if (player.CanUseOrRemovePotions)
+        if (player.CanRemovePotions)
         {
             var potions = player.Potions?.ToList() ?? new();
             for (int i = 0; i < potions.Count; i++)
@@ -227,7 +227,7 @@ public partial class RunSimulator
     /// </summary>
     private static void AddOutOfCombatPotionActions(Player player, List<Dictionary<string, object?>> legal)
     {
-        if (!player.CanUseOrRemovePotions) return;
+        if (!player.CanRemovePotions) return;
         var potions = player.Potions?.ToList() ?? new();
         for (int i = 0; i < potions.Count; i++)
         {

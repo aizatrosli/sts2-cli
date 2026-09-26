@@ -180,7 +180,12 @@ public class AtlasTexture : Texture2D
     public Texture2D? Atlas { get; set; }
 }
 public class ImageTexture : Texture2D { }
-public class CurveXyzTexture : Texture2D { }
+public class CurveXyzTexture : Texture2D
+{
+    public Curve? CurveX { get; set; }
+    public Curve? CurveY { get; set; }
+    public Curve? CurveZ { get; set; }
+}
 
 // Material types
 public class Material : Resource { }

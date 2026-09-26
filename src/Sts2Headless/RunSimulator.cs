@@ -298,7 +298,7 @@ public partial class RunSimulator
     private static bool TrySelectActs(string seed, string? act1, out List<ActModel> acts, out string error)
     {
         error = "";
-        var rng = new MegaCrit.Sts2.Core.Random.Rng(StringHelper.GetDeterministicHashCode(seed), "act_selection");
+        var rng = new MegaCrit.Sts2.Core.Random.Rng((uint)StringHelper.GetDeterministicHashCode(seed), "act_selection");
         acts = ActModel.GetRandomList(rng, UnlockState.all, isMultiplayer: false).ToList();
         switch ((act1 ?? "random").Trim().ToLowerInvariant())
         {
@@ -1807,7 +1807,7 @@ public partial class RunSimulator
         if (idx < 0 || idx >= potionsList.Count) return Error($"Invalid potion index {idx}");
         var potion = potionsList[idx];
         if (potion == null) return Error($"No potion at index {idx}");
-        if (!player.CanUseOrRemovePotions)
+        if (!player.CanRemovePotions)
             return Error("Potions cannot be used right now");
         if (!CanUsePotion(potion, CombatManager.Instance.IsInProgress))
             return Error($"{potion.Id.Entry} cannot be used here ({potion.Usage})");
@@ -3301,11 +3301,11 @@ public partial class RunSimulator
 
         TestMode.IsOn = true;
 
-        // The current engine requires mod discovery and assembly metadata even
-        // for unmodded runs. TestMode skips filesystem/workshop mod loading.
+        // The engine requires mod discovery even for unmodded runs. TestMode skips
+        // filesystem/workshop mod loading. (v0.111 also needs AssemblyInfo.Init(); v0.107.1
+        // has no such type.)
         MegaCrit.Sts2.Core.Modding.ModManager.Initialize(
             new MegaCrit.Sts2.Core.Modding.ModManagerFileIo(), null, null).GetAwaiter().GetResult();
-        MegaCrit.Sts2.Core.Modding.AssemblyInfo.Init();
 
         // Install inline sync context on main thread
         SynchronizationContext.SetSynchronizationContext(_syncCtx);
@@ -3604,7 +3604,11 @@ public partial class RunSimulator
         public bool PendingCancelable { get; private set; }
         /// <summary>The CardSelectCmd entry point without "From" (HandForDiscard, DeckForUpgrade, ChooseACardScreen...).</summary>
         public string PendingSource { get; private set; } = "";
+        /// <summary>Everything SelectionPrefsPatches recorded for the pending selection.</summary>
+        public SelectionPrefsPatches.Info? PendingInfo { get; private set; }
         private TaskCompletionSource<IEnumerable<CardModel>>? _pendingTcs;
+        /// <summary>Identity of the pending selection (a new one gets a new task).</summary>
+        public object? PendingToken => HasPending ? _pendingTcs : null;
 
         public bool HasPending => _pendingTcs != null && !_pendingTcs.Task.IsCompleted;
 
@@ -3622,7 +3626,9 @@ public partial class RunSimulator
             var cancelable = info?.Cancelable ?? false;
 
             // One option and a pick is required: nothing to decide, unless the UI lets you cancel.
-            if (optList.Count == 1 && minSelect >= 1 && !cancelable)
+            // The flysts payload mirrors the game UI, which still shows such a screen (the engine
+            // itself already skips selections whose options cannot exceed MinSelect).
+            if (optList.Count == 1 && minSelect >= 1 && !cancelable && !FlystsMode)
                 return Task.FromResult<IEnumerable<CardModel>>(optList);
 
             // Store pending selection and wait
@@ -3632,6 +3638,7 @@ public partial class RunSimulator
             PendingCancelable = cancelable;
             PendingPrompt = info?.Prompt ?? "";
             PendingSource = info?.Source ?? "";
+            PendingInfo = info;
             _pendingTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
 
             Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}");
@@ -4203,6 +4210,7 @@ public partial class RunSimulator
 
     private void ResetRunScopedState()
     {
+        ResetFlystsState();
         _roomEntrySaveJson = null; // a checkpoint belongs to the run it was taken in
         _cardSelector.CancelPending();
         _cardSelector.SkipReward();

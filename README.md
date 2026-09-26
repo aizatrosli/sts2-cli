@@ -21,10 +21,16 @@ cd sts2-cli
 
 Or just run `python3 python/play.py` — it auto-detects and sets up on first run.
 
-Tested with **v0.111.0 (Steam public-beta, build 24724944)**. After updating the
+Tested with **v0.107.1 (Steam public branch, build 23811903, commit 59260271)**; earlier
+revisions targeted v0.111.0 (public beta, build 24724944, `docs/compatibility-v0.111.0.md`).
+On Linux pass the data directory: `./setup.sh ".../Slay the Spire 2/data_sts2_linuxbsd_x86_64"`.
+After updating the
 installed game in Steam, rerun `./setup.sh` to refresh the engine DLLs, patches,
 and official English localization, then rebuild. Other game versions
 may require adapter changes.
+
+For the flysts trainer, `start_run {"payload": "flysts", ...}` answers with the FlystsBridge
+mod's payload and accepts its actions (see `docs/flysts_payload.md`).
 
 For a compatibility check, run `python3 python/play_full_run.py 5 Ironclad`
 (repeat for Silent, Defect, Regent, and Necrobinder). A completed run reaches

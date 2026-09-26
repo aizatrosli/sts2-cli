@@ -1,4 +1,4 @@
-# Reviewed TestMode.IsOn/IsOff reads in gameplay code (sts2 v0.111.0, see tools/TestModeAudit/Program.cs).
+# Reviewed TestMode.IsOn/IsOff reads in gameplay code (sts2 v0.107.1, see tools/TestModeAudit/Program.cs).
 # Unannotated entries only skip visuals, audio, UI screens, logging or tutorial logic.
 # Gameplay-changing sites are patched in src/Sts2Headless/TestModePatches.cs and marked 'patched'.
 MegaCrit.Sts2.Core.Assets.PreloadManager::GetCombatAssetPaths
@@ -7,15 +7,13 @@ MegaCrit.Sts2.Core.Assets.PreloadManager::LoadMainMenuAssets
 MegaCrit.Sts2.Core.Assets.PreloadManager::LoadMainMenuEssentials
 MegaCrit.Sts2.Core.Assets.PreloadManager::LoadRoomAssets
 MegaCrit.Sts2.Core.Assets.PreloadManager::LoadRunAssets
-MegaCrit.Sts2.Core.Combat.CombatState::GodotTimerTask
 MegaCrit.Sts2.Core.Combat.CombatStateTracker::NotifyCombatStateChanged
 MegaCrit.Sts2.Core.Commands.CardCmd::Preview
 MegaCrit.Sts2.Core.Commands.CardCmd::PreviewCardPileAdd
 MegaCrit.Sts2.Core.Commands.CardCmd::PreviewInternal
 MegaCrit.Sts2.Core.Commands.CardCmd::Transform
+MegaCrit.Sts2.Core.Commands.CardPileCmd::Add
 MegaCrit.Sts2.Core.Commands.CardPileCmd::AddDuringManualCardPlay
-MegaCrit.Sts2.Core.Commands.CardPileCmd::GetTweenForCardsChangingPiles
-MegaCrit.Sts2.Core.Commands.CardPileCmd::RemoveFromDeck
 MegaCrit.Sts2.Core.Commands.CardSelectCmd::FromChooseABundleScreen
 MegaCrit.Sts2.Core.Commands.CardSelectCmd::Reset
 MegaCrit.Sts2.Core.Commands.CreatureCmd::Heal
@@ -23,6 +21,7 @@ MegaCrit.Sts2.Core.Commands.CreatureCmd::Kill
 MegaCrit.Sts2.Core.Commands.CreatureCmd::TriggerAnim
 MegaCrit.Sts2.Core.Commands.ForgeCmd::PreviewSovereignBlade
 MegaCrit.Sts2.Core.Commands.MapCmd::SetBossEncounter
+MegaCrit.Sts2.Core.Commands.OstyCmd::Summon
 MegaCrit.Sts2.Core.Commands.VfxCmd::GetSideCenter
 MegaCrit.Sts2.Core.Commands.VfxCmd::GetSideCenterFloor
 MegaCrit.Sts2.Core.Commands.VfxCmd::PlayFullScreenInCombat
@@ -37,10 +36,9 @@ MegaCrit.Sts2.Core.Entities.Creatures.Creature::GetCreatureNode
 MegaCrit.Sts2.Core.Entities.Creatures.Creature::GetVfxContainer
 MegaCrit.Sts2.Core.Entities.Merchant.MerchantPotionEntry::CalcCost  # patched (price roll + shop RNG)
 MegaCrit.Sts2.Core.Entities.RestSite.MendRestSiteOption::OnSelect
-MegaCrit.Sts2.Core.Entities.RestSite.RestSiteOption::Generate
 MegaCrit.Sts2.Core.GameActions.ActionExecutor::WaitForUnpause
 MegaCrit.Sts2.Core.GameActions.DiscardPotionGameAction::CancelAction
-MegaCrit.Sts2.Core.GameActions.MoveToMapCoordAction::ExecuteAction
+MegaCrit.Sts2.Core.GameActions.MoveToMapCoordAction::GoToMapCoord
 MegaCrit.Sts2.Core.GameActions.Multiplayer.NetCombatCardDb::StartCombat
 MegaCrit.Sts2.Core.GameActions.PlayCardAction::CancelAction
 MegaCrit.Sts2.Core.GameActions.UsePotionAction::CancelAction
@@ -52,7 +50,6 @@ MegaCrit.Sts2.Core.Localization.LocManager::SmartFormat
 MegaCrit.Sts2.Core.Logging.Logger::GetIsRunningFromGodotEditor
 MegaCrit.Sts2.Core.Modding.ModManager::Initialize
 MegaCrit.Sts2.Core.Modding.ModManager::ResetForTests
-MegaCrit.Sts2.Core.Modding.ModManager::TryLoadMod
 MegaCrit.Sts2.Core.Models.AbstractModel::NeverEverCallThisOutsideOfTests_SetIsMutable
 MegaCrit.Sts2.Core.Models.ActModel::GetRandomList  # new-profile act discovery; headless = fully discovered profile (intended)
 MegaCrit.Sts2.Core.Models.CardModel::NeverEverCallThisOutsideOfTests_ClearOwner
@@ -62,7 +59,6 @@ MegaCrit.Sts2.Core.Models.Cards.Nightmare::OnPlay
 MegaCrit.Sts2.Core.Models.Enchantments.Slither::set_TestEnergyCostOverride
 MegaCrit.Sts2.Core.Models.EventModel::GetAssetPaths
 MegaCrit.Sts2.Core.Models.Events.DollRoom::BeforeEventStarted
-MegaCrit.Sts2.Core.Models.MonsterModel::PerformMove
 MegaCrit.Sts2.Core.Models.Monsters.BowlbugSilk::SpitMove
 MegaCrit.Sts2.Core.Models.Monsters.BygoneEffigy::SlashMove
 MegaCrit.Sts2.Core.Models.Monsters.BygoneEffigy::WakeMove
@@ -77,7 +73,6 @@ MegaCrit.Sts2.Core.Models.Monsters.LeafSlimeM::StickyShotMove
 MegaCrit.Sts2.Core.Models.Monsters.MagiKnight::MagicBombMove
 MegaCrit.Sts2.Core.Models.Monsters.Myte::ToxicMove
 MegaCrit.Sts2.Core.Models.Monsters.Noisebot::AfterAddedToRoom
-MegaCrit.Sts2.Core.Models.Monsters.SlumberingBeetle::RolloutMove
 MegaCrit.Sts2.Core.Models.Monsters.SnappingJaxfruit::EnergyOrb
 MegaCrit.Sts2.Core.Models.Monsters.Stabbot::AfterAddedToRoom
 MegaCrit.Sts2.Core.Models.Monsters.TorchHeadAmalgam::OnDieToDoom
@@ -92,7 +87,7 @@ MegaCrit.Sts2.Core.Models.Monsters.WaterfallGiant::IncrementBuildUpAnimationTrac
 MegaCrit.Sts2.Core.Models.Monsters.Zapbot::AfterAddedToRoom
 MegaCrit.Sts2.Core.Models.PotionModel::OnUseWrapper
 MegaCrit.Sts2.Core.Models.Potions.FoulPotion::ShowPotionVfx
-MegaCrit.Sts2.Core.Models.Powers.InfestedPower::RevealWrigglersAfterDeathAnim
+MegaCrit.Sts2.Core.Models.Powers.InfestedPower::AfterDeath
 MegaCrit.Sts2.Core.Models.Powers.RollingBoulderPower::AfterPlayerTurnStart  # same damage without the VFX-driven hits
 MegaCrit.Sts2.Core.Models.Powers.SandpitPower::AfterApplied
 MegaCrit.Sts2.Core.Models.Powers.SandpitPower::AfterPowerAmountChanged
@@ -117,10 +112,14 @@ MegaCrit.Sts2.Core.Rewards.RewardsSet::Offer  # test selector hook used by the m
 MegaCrit.Sts2.Core.Rooms.MapRoom::EnterInternal
 MegaCrit.Sts2.Core.Rooms.MerchantRoom::Exit
 MegaCrit.Sts2.Core.Runs.RunManager::ClearScreens
+MegaCrit.Sts2.Core.Runs.RunManager::EnterAct
+MegaCrit.Sts2.Core.Runs.RunManager::EnterNextAct
+MegaCrit.Sts2.Core.Runs.RunManager::EnterRoomWithoutExitingCurrentRoom
 MegaCrit.Sts2.Core.Runs.RunManager::FadeIn
-MegaCrit.Sts2.Core.Runs.RunManager::FadeOut
 MegaCrit.Sts2.Core.Runs.RunManager::InitializeShared
 MegaCrit.Sts2.Core.Runs.RunManager::ReturnToMainMenuWithError
+MegaCrit.Sts2.Core.Runs.RunManager::SetUpSavedMultiplayer
+MegaCrit.Sts2.Core.Runs.RunManager::SetUpSavedSingleplayer
 MegaCrit.Sts2.Core.Runs.RunManager::ShouldApplyTutorialModifications
 MegaCrit.Sts2.Core.Runs.RunManager::TryGetRoomTypeForTutorial
 MegaCrit.Sts2.Core.Runs.RunManager::UpdatePlayerStatsInMapPointHistory
@@ -128,5 +127,4 @@ MegaCrit.Sts2.Core.Runs.RunManager::UpdateRichPresence
 MegaCrit.Sts2.Core.Runs.RunRngSet::GetMockInstance
 MegaCrit.Sts2.Core.Saves.Managers.ProgressSaveManager::SeenPopup
 MegaCrit.Sts2.Core.Saves.SaveManager::ConstructDefault
-MegaCrit.Sts2.Core.Saves.SaveManager::IncrementNumReloads
 MegaCrit.sts2.Core.Nodes.TopBar.NTopBarModifier::Create

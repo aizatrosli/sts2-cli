@@ -165,6 +165,9 @@ class TestGameRules:
         assert state["player"]["hp"] == 84  # 20 + 80% of 80 missing (A2 Weary Traveler)
 
     def test_abundance_choice_is_mandatory(self, game):
+        to_map(game, character="Ironclad")
+        if game.set_player(deck=["ABUNDANCE"])["type"] != "ok":
+            pytest.skip("ABUNDANCE is not in this game build (added after v0.107.1)")
         state = first_combat(game, ["ABUNDANCE"] * 6, character="Ironclad")
         state = game.act("play_card", card_index=hand_index(state, "ABUNDANCE"))
         assert state["decision"] == "card_select"

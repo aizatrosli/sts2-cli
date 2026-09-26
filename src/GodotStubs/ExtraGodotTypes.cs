@@ -21,6 +21,7 @@ public class CpuParticles2D : Node2D
 {
     public bool Emitting { get; set; }
     public float EmissionSphereRadius { get; set; } = 1f;
+    public Texture2D? Texture { get; set; }
 }
 
 public class Marker2D : Node2D { }

@@ -102,10 +102,9 @@ class TestManualFlowSaves:
 
 class TestPotionsInCombat:
     def test_targeted_and_self_potions(self, game):
-        state = to_map(game)
+        to_map(game)
         game.set_player(potions=["FIRE_POTION", "BLOCK_POTION"])
-        choice = state["choices"][0]
-        state = game.act("select_map_node", col=choice["col"], row=choice["row"])
+        state = game.enter_room("combat", encounter="TOADPOLES_WEAK")  # two enemies
         assert state["decision"] == "combat_play" and len(state["enemies"]) >= 2
 
         fire = [a["args"] for a in legal(state) if a["action"] == "use_potion" and a["args"]["potion_index"] == 0]
