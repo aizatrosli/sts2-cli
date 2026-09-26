@@ -105,4 +105,8 @@ auto-resolves a single forced option (the game still shows that screen).
   activation animation (Kusarigama's `IsActivating`).
 - The Architect epilogue after the final boss is skipped (manual flow's victory).
 - The Fake Merchant event reports its options as the mod does (none), so a trainer strands on
-  it as it does live.
+  it as it does live (captured on the game through the mod's debug console, 2026-09-26: no
+  options, `choose_event_option` answers "No event options available").
+- Trial's "Double Down" opens the abandon-run popup, which the mod never sees or confirms: the
+  page stays (Accept / Double Down) and Accept then runs the trial as usual (captured on the
+  game). The default protocol still abandons the run.

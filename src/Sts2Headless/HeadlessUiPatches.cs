@@ -46,7 +46,8 @@ namespace Sts2Headless;
 ///   at the first relic: relics, potions and the free card removal were never bought. Headless it
 ///   runs the same purchase sequence without the UI.
 /// * Trial's "Double Down" opens the abandon-run confirmation popup; confirming it abandons the run.
-///   Headless it calls <c>RunManager.Abandon()</c> directly, which ends the run in defeat.
+///   Headless it calls <c>RunManager.Abandon()</c> directly, which ends the run in defeat. In flysts
+///   payload mode it is a no-op: the mod never confirms that popup (verified on the game).
 /// * Foul Potion outside combat is thrown at a merchant. Its usability check asks the UI for the
 ///   merchant button (null headless), so it was never usable; at the Fake Merchant its use also
 ///   needs the event's <c>NFakeMerchant</c> node to start the fight. Headless it is usable in a
@@ -267,9 +268,17 @@ internal static class HeadlessUiPatches
 
     public static bool TrialDoubleDownPrefix(ref Task __result)
     {
+        __result = Task.CompletedTask;
+        if (RunSimulator.FlystsMode)
+        {
+            // The mod never sees or confirms the popup: live, Double Down changes nothing (the
+            // page keeps Accept / Double Down, Accept then runs the trial as usual; captured on
+            // the game with the mod's debug console, 2026-09-26).
+            Console.Error.WriteLine("[SIM] Trial: Double Down opens the abandon popup, which the mod never confirms");
+            return false;
+        }
         Console.Error.WriteLine("[SIM] Trial: Double Down abandons the run");
         RunManager.Instance.Abandon();
-        __result = Task.CompletedTask;
         return false;
     }
 

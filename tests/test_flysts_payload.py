@@ -224,3 +224,18 @@ def test_lords_parasol_buys_the_whole_shop(game):
         state = r["state"]
     assert state["state_type"] == "shop" and removal
     assert not [i for i in state["items"] if i.get("kind") in ("card", "relic", "potion") and i.get("in_stock")]
+
+
+def test_trial_double_down_changes_nothing(game):
+    """Double Down opens the abandon-run popup, which the mod never sees or confirms: live the
+    page stays (Accept / Double Down) and Accept then runs the trial (captured on the game)."""
+    start(game)
+    game.send({"cmd": "enter_room", "type": "event", "event": "TRIAL"})
+    assert act(game, "choose_event_option", index=1)["status"] == "ok"  # Reject
+    page = game.send({"cmd": "flysts_state"})["state"]
+    assert [o["text_key"].split(".")[-1] for o in page["options"]] == ["ACCEPT", "DOUBLE_DOWN"]
+    r = act(game, "choose_event_option", index=1)  # Double Down
+    assert r["status"] == "ok" and r["state"]["state_type"] == "event"
+    assert r["state"]["options"] == page["options"] and r["state"]["player"] == page["player"]
+    r = act(game, "choose_event_option", index=0)  # Accept
+    assert [o["text_key"].split(".")[-1] for o in r["state"]["options"]] == ["GUILTY", "INNOCENT"]
