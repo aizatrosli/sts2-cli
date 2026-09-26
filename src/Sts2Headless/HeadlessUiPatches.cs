@@ -10,8 +10,11 @@ using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Models.Monsters;
 using MegaCrit.Sts2.Core.Models.Potions;
+using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Audio;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Vfx.Backgrounds;
 using MegaCrit.Sts2.Core.Nodes.Vfx.Utilities;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
@@ -32,7 +35,16 @@ namespace Sts2Headless;
 /// * DenseVegetation.Rest plays audio through <c>NDebugAudioManager.Instance</c> behind the same
 ///   kind of IsMe guard; forced false as well.
 /// * Crusher/Rocket (Kaiser Crab arms) play their death sound through an unguarded
-///   <c>NAudioManager.Instance.PlayOneShot</c>; made null-safe like the screen shakes.
+///   <c>NAudioManager.Instance.PlayOneShot</c>; made null-safe like the screen shakes. Since game
+///   v0.107 they also animate the boss body (<c>NKaiserCrabBossBackground</c>, found through
+///   <c>NCombatRoom.Instance.Background</c>) on spawn, on every move, on hurt and on death; its
+///   <c>Background</c> getter threw on spawn and the fight ended at once (seen live 2026-09-26:
+///   FMT1751 floor 33, the engine went from the map straight to the card reward). The body's
+///   animations are no-ops and the arms get a placeholder body.
+/// * Lord's Parasol buys the whole shop on entry; around each relic purchase it toggles the top
+///   bar's Map/Deck buttons outside its TestMode guard (<c>NRun.Instance</c>), so headless it threw
+///   at the first relic: relics, potions and the free card removal were never bought. Headless it
+///   runs the same purchase sequence without the UI.
 /// * Trial's "Double Down" opens the abandon-run confirmation popup; confirming it abandons the run.
 ///   Headless it calls <c>RunManager.Abandon()</c> directly, which ends the run in defeat.
 /// * Foul Potion outside combat is thrown at a merchant. Its usability check asks the UI for the
@@ -129,12 +141,90 @@ internal static class HeadlessUiPatches
             foul++;
         }
         catch (Exception ex) { PatchReport.Warn($"FoulPotion patch failed: {ex.Message}"); }
+        int crab = 0;
+        try
+        {
+            // The Kaiser Crab's arms (Crusher, Rocket) animate the boss's body, a node of the combat
+            // room's background: every move awaits its animation and the arms throw on spawn when
+            // there is no NCombatRoom. The animations become no-ops; the arms get a placeholder body.
+            var bg = typeof(NKaiserCrabBossBackground);
+            foreach (var name in new[] { "PlayAttackAnim", "PlayHurtAnim", "PlayArmDeathAnim", "PlayRightSideChargeUpAnim",
+                                         "PlayRightSideHeavy", "PlayRightRecharge", "PlayBodyDeathAnim" })
+            {
+                var m = AccessTools.Method(bg, name);
+                var prefix = m.ReturnType == typeof(Task) ? nameof(CompletedTaskPrefix) : nameof(SkipPrefix);
+                harmony.Patch(m, new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), prefix)));
+                crab++;
+            }
+            foreach (var arm in new[] { typeof(Crusher), typeof(Rocket) })
+            {
+                harmony.Patch(AccessTools.PropertyGetter(arm, "Background"),
+                    new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(CrabBackgroundPrefix))));
+                crab++;
+            }
+        }
+        catch (Exception ex) { PatchReport.Warn($"Kaiser Crab background patch failed: {ex.Message}"); }
+        int parasol = 0;
+        try
+        {
+            harmony.Patch(AccessTools.Method(typeof(LordsParasol), "PurchaseEverything"),
+                new HarmonyMethod(AccessTools.Method(typeof(HeadlessUiPatches), nameof(LordsParasolPrefix))));
+            parasol++;
+        }
+        catch (Exception ex) { PatchReport.Warn($"Lord's Parasol patch failed: {ex.Message}"); }
         Console.Error.WriteLine($"[INFO] Headless UI patches: {nullSafe} null-safe call sites, {trial} Trial methods, {rest} DenseVegetation methods");
         PatchReport.Expect("Headless UI null-safe call sites", nullSafe, 11);
         PatchReport.Expect("Headless UI Trial methods", trial, 3);
         PatchReport.Expect("Headless UI DenseVegetation methods", rest, 1);
         PatchReport.Expect("Headless UI Foul Potion methods", foul, 2);
+        PatchReport.Expect("Headless UI Kaiser Crab background", crab, 9);
+        PatchReport.Expect("Headless UI Lord's Parasol", parasol, 1);
     }
+
+    /// <summary>LordsParasol.PurchaseEverything without its UI: the game's own sequence (every
+    /// stocked character and colorless card, every relic, every potion, then the card removal,
+    /// not cancelable, all free). The original toggles the top bar's Map/Deck buttons around each
+    /// relic purchase outside its TestMode guard, so headless it threw at the first relic and the
+    /// relics, potions and removal were never bought (soak 2026-09-26). The waits are no-ops headless.</summary>
+    public static bool LordsParasolPrefix(LordsParasol __instance, MerchantInventory inventory, ref Task __result)
+    {
+        if (NRun.Instance != null) return true;
+        __result = HeadlessPurchaseEverything(__instance, inventory);
+        return false;
+    }
+
+    private static async Task HeadlessPurchaseEverything(LordsParasol relic, MerchantInventory inventory)
+    {
+        if (inventory.Player != relic.Owner) return;
+        foreach (var entry in inventory.CharacterCardEntries)
+            if (entry.IsStocked) await entry.OnTryPurchaseWrapper(inventory, ignoreCost: true);
+        foreach (var entry in inventory.ColorlessCardEntries)
+            if (entry.IsStocked) await entry.OnTryPurchaseWrapper(inventory, ignoreCost: true);
+        foreach (var entry in inventory.RelicEntries)
+            await entry.OnTryPurchaseWrapper(inventory, ignoreCost: true);
+        foreach (var entry in inventory.PotionEntries)
+            await entry.OnTryPurchaseWrapper(inventory, ignoreCost: true);
+        if (inventory.CardRemovalEntry != null)
+            await inventory.CardRemovalEntry.OnTryPurchaseWrapper(inventory, ignoreCost: true, cancelable: false);
+    }
+
+    private static readonly NKaiserCrabBossBackground HeadlessCrabBody =
+        (NKaiserCrabBossBackground)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(NKaiserCrabBossBackground));
+
+    public static bool CrabBackgroundPrefix(ref NKaiserCrabBossBackground __result)
+    {
+        if (NCombatRoom.Instance != null) return true;
+        __result = HeadlessCrabBody;
+        return false;
+    }
+
+    public static bool CompletedTaskPrefix(ref Task __result)
+    {
+        __result = Task.CompletedTask;
+        return false;
+    }
+
+    public static bool SkipPrefix() => false;
 
     // ─── transpilers ───
 

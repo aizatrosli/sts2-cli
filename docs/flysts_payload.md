@@ -25,6 +25,12 @@ this mode is always a manual-flow run, and every engine step still goes through
 - `seed`: optional; canonicalized like the game (`SeedHelper.CanonicalizeSeed`); a missing seed
   is rolled and reported as `state.run.seed`.
 - A refused action returns `status: error` with the mod's error text and changes nothing.
+- `{"cmd":"content_catalog","profile":"<progress.save>"}` (no run needed; with `profile`, no run in progress): every card,
+  relic, potion (with pool, rarity and, given a profile, `unlocked` for a singleplayer run from
+  it), event (per act / shared / ancient), encounter, monster and power in ModelDb. flysts's
+  `tools/cli_coverage.py` uses it as the coverage denominator.
+- The debug commands (`enter_room`, `set_player`, `set_draw_order`; engine `--debug`) work in
+  this mode: the payload re-reads the decision after them.
 
 ## Run creation (FlystsProfile, `RunSimulator.Flysts.cs`)
 
@@ -57,7 +63,8 @@ shows:
 | `resolving` | the engine's own expression (`ActionExecutor.IsRunning \|\| !ActionQueueSet.IsEmpty`): false at a settled decision |
 | `map.traveling` | false; `next_options` = travelable points sorted by (col, row) |
 | event `enabled` | true (every logged live option read true; `locked` carries the lock) |
-| rest options / leave `enabled` | the option's own flag, false while a chosen option resolves; leave after a choice |
+| rest options / leave `enabled` | the BUTTON's state, as the mod reads it: true (a model-disabled option such as Smith with nothing to upgrade keeps an enabled, unclickable button; choosing it fails "is disabled"), false while a chosen option resolves; leave after a choice |
+| rest site after a choice that opened a screen (Smith's upgrade grid, Tiny Mailbox's potion rewards) | the room's buttons from before the choice, disabled, then leave enabled: the screen closing re-activates the room with no options left, so Proceed enables before the post-select VFX ends and `UpdateRestSiteOptions` frees the greyed buttons (`NRestSiteRoom.OnActiveScreenUpdated`); every logged live read lands in that window. A plain Rest shows only leave |
 | card `vars` | `ClearPreview` + `UpdateDynamicVarPreview(Normal, CurrentTarget)` as `NCard.UpdateVisuals` does, cleared again afterwards |
 | hand selection (`hand_selection`, `selected`, `selectable`, `can_confirm`, `hand_prompt`/min/max) | `FlystsSelection` (below) |
 | grid screens (`selected`, `selected_count`, `preview_open`, `can_confirm`, `min/max_select`, `prompt`, `enchantment(_amount)`) | `FlystsSelection`; prefs from `SelectionPrefsPatches` |

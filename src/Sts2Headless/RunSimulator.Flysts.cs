@@ -229,6 +229,10 @@ public partial class RunSimulator
     // one stays claimable and is left behind by proceed).
     private object? _flystsRewardsScreen;
     private readonly HashSet<Reward> _flystsOpenedCardRewards = new();
+    // The rest site's buttons when an option was chosen, and whether that option opened a
+    // selection screen (FlystsRestSiteState lists them greyed after it; reset per room).
+    private List<string>? _flystsRestButtons;
+    private bool _flystsRestOverlay;
 
     private string? FlystsDecision => _flystsNative?.GetValueOrDefault("decision") as string;
 
@@ -400,6 +404,17 @@ public partial class RunSimulator
         return r;
     }
 
+    /// <summary>After a debug command (enter_room, set_player, set_draw_order) in flysts mode:
+    /// re-read the native decision and auto-advance the mod's non-decision screens, as after an
+    /// action (a debug room can open a rewards screen at once, e.g. a relic bought on entry).</summary>
+    internal Dictionary<string, object?>? FlystsRefreshAfterDebug()
+    {
+        if (!FlystsMode || _runState == null) return null;
+        // reply with the payload, not the debug command's native decision: exporting that stale
+        // decision would make it the validation gate's legal set again
+        return FlystsAdvance(FlystsCurrentNative(), "debug command");
+    }
+
     private Dictionary<string, object?> FlystsCurrentNative()
     {
         var d = DetectDecisionPoint();
@@ -498,6 +513,7 @@ public partial class RunSimulator
         if (!_cardSelector.HasPending || _cardSelector.PendingOptions == null) return null;
         var token = _cardSelector.PendingToken;
         if (_flystsSel != null && ReferenceEquals(_flystsSel.Token, token)) return _flystsSel;
+        if (_restSiteTask != null && _runState?.CurrentRoom is RestSiteRoom) _flystsRestOverlay = true;
         _flystsSel = FlystsNewSelection(token);
         return _flystsSel;
     }
@@ -694,6 +710,8 @@ public partial class RunSimulator
                 SettleRestSiteTask();
                 if (index < 0 || index >= room.Options.Count) return (null, $"Rest option index {index} out of range ({room.Options.Count} options)");
                 if (_restSiteTask != null || !room.Options[index.Value].IsEnabled) return (null, $"Rest option {index} is disabled");
+                _flystsRestButtons = room.Options.Select(o => o.OptionId).ToList();
+                _flystsRestOverlay = false;
                 FlystsNative("choose_option", new() { ["option_index"] = index.Value }, out err);
                 return err == null ? ($"Selecting rest site option {index}", null) : (null, err);
             }

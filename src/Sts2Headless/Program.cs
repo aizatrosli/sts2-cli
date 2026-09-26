@@ -171,6 +171,9 @@ class Program
             case "flysts_state":
                 return sim.FlystsGetState();
 
+            case "content_catalog":
+                return sim.ContentCatalog(cmd.TryGetProperty("profile", out var cpr) ? cpr.GetString() : null);
+
             case "flysts_action":
             {
                 var faction = cmd.TryGetProperty("action", out var fa) ? fa.GetString() ?? "" : "";
@@ -245,7 +248,8 @@ class Program
                 var args = new Dictionary<string, JsonElement>();
                 foreach (var prop in cmd.EnumerateObject())
                     if (prop.Name != "cmd") args[prop.Name] = prop.Value;
-                return sim.SetPlayer(args);
+                var setPlayer = sim.SetPlayer(args);
+                return sim.FlystsRefreshAfterDebug() ?? setPlayer;
             }
 
             case "enter_room":
@@ -253,7 +257,8 @@ class Program
                 var roomType = cmd.TryGetProperty("type", out var rt) ? rt.GetString() ?? "" : "";
                 var encounter = cmd.TryGetProperty("encounter", out var enc) ? enc.GetString() : null;
                 var eventId = cmd.TryGetProperty("event", out var ev) ? ev.GetString() : null;
-                return sim.EnterRoom(roomType, encounter, eventId);
+                var entered = sim.EnterRoom(roomType, encounter, eventId);
+                return sim.FlystsRefreshAfterDebug() ?? entered;
             }
 
             case "set_draw_order":
@@ -262,7 +267,8 @@ class Program
                 if (cmd.TryGetProperty("cards", out var cardsArr))
                     foreach (var c in cardsArr.EnumerateArray())
                         cards.Add(c.GetString() ?? "");
-                return sim.SetDrawOrder(cards);
+                var ordered = sim.SetDrawOrder(cards);
+                return sim.FlystsRefreshAfterDebug() ?? ordered;
             }
 
             case "write_continue_save":

@@ -109,6 +109,8 @@ public partial class RunSimulator
         _roomEndRewardsOffered = false;
         _restSiteTask = null;
         _restSiteChoiceMade = false;
+        _flystsRestButtons = null;
+        _flystsRestOverlay = false;
         _chestOpened = false;
         _chestTask = null;
         _treasureRelicResolved = false;
@@ -132,6 +134,9 @@ public partial class RunSimulator
     {
         var screen = new RewardsScreen(set, set.Room is CombatRoom);
         lock (_flowLock) _rewardsScreens.Add(screen);
+        // a rest option's own rewards (Tiny Mailbox, Dream Catcher) open a screen over the room;
+        // this runs on the option's task, possibly before _restSiteTask is assigned
+        if (_runState?.CurrentRoom is RestSiteRoom) _flystsRestOverlay = true;
         if (screen.IsTerminal) _roomEndRewardsOffered = true;
         Log($"Rewards screen opened: {set.Rewards.Count} rewards (terminal={screen.IsTerminal})");
         return screen.Done.Task;

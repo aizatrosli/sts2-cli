@@ -639,6 +639,10 @@ public partial class RunSimulator
     private static IReadOnlyList<EventOption> FlystsEventOptions(EventModel? ev)
     {
         if (ev == null) return Array.Empty<EventOption>();
+        // A custom layout (the Fake Merchant's NFakeMerchant) is no NEventLayout, so the mod's
+        // EventOptionButtons finds no buttons -- not even the Proceed of a finished event, which is
+        // the layout's own NProceedButton there.
+        if (ev.LayoutType == EventLayoutType.Custom) return Array.Empty<EventOption>();
         if (ev.IsFinished)
             return new[] { new EventOption(ev, MegaCrit.Sts2.Core.Nodes.Rooms.NEventRoom.Proceed, "PROCEED", false, true) };
         return ev.CurrentOptions;
@@ -700,9 +704,27 @@ public partial class RunSimulator
         bool resolving = _restSiteTask != null;
         foreach (var option in room.Options)
         {
-            // NRestSiteRoom greys every button while a chosen option resolves (DisableOptions).
-            options.Add(new Dictionary<string, object?> { ["index"] = i, ["option_id"] = option.OptionId, ["enabled"] = !resolving && option.IsEnabled, ["leave"] = false });
+            // NRestSiteRoom greys every button while a chosen option resolves (DisableOptions). The
+            // mod reports the BUTTON's state: a model-disabled option (Smith with nothing left to
+            // upgrade) gets an enabled but unclickable button (NRestSiteButton._isUnclickable), so
+            // it is listed enabled and choosing it fails "is disabled", as choose_rest_option does.
+            options.Add(new Dictionary<string, object?> { ["index"] = i, ["option_id"] = option.OptionId, ["enabled"] = !resolving, ["leave"] = false });
             i++;
+        }
+        if (!resolving && _restSiteChoiceMade && room.Options.Count == 0 && _flystsRestOverlay && _flystsRestButtons != null)
+        {
+            // NRestSiteRoom.OnActiveScreenUpdated: when a screen the option opened (Smith's upgrade
+            // grid, Tiny Mailbox's potion rewards) closes, the room is the active screen again with
+            // no options left and Proceed enables at once, while the buttons HideChoices greyed stay
+            // until the option's post-select VFX ends and UpdateRestSiteOptions frees them (1-2 s).
+            // The mod lists them disabled in that window, which is where the trainer's next read
+            // lands (every logged live row after a Smith or a Tiny Mailbox Rest; a plain Rest
+            // opens no screen and shows only Proceed).
+            foreach (var id in _flystsRestButtons)
+            {
+                options.Add(new Dictionary<string, object?> { ["index"] = i, ["option_id"] = id, ["enabled"] = false, ["leave"] = false });
+                i++;
+            }
         }
         options.Add(new Dictionary<string, object?> { ["index"] = i, ["leave"] = true, ["enabled"] = !resolving && (_restSiteChoiceMade || room.Options.Count == 0) });
         return new()

@@ -103,3 +103,124 @@ def test_default_protocol_after_a_flysts_run(game):
     state = game.start()
     assert state["type"] == "decision" and "legal_actions" in state
     assert state["context"]["flow"] == "auto"
+
+
+def rest_options(state):
+    return [("LEAVE" if o["leave"] else o["option_id"], o["enabled"]) for o in state["options"]]
+
+
+def rest_site(game):
+    start(game)
+    game.send({"cmd": "enter_room", "type": "rest_site"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert rest_options(state) == [("HEAL", True), ("SMITH", True), ("LEAVE", False)]
+    return state
+
+
+def test_rest_site_after_smith_keeps_greyed_buttons(game):
+    """The upgrade grid closing re-activates the room with no options left: Proceed enables at
+    once while HideChoices' greyed buttons stay (NRestSiteRoom.OnActiveScreenUpdated); every
+    logged live read after a Smith shows them."""
+    rest_site(game)
+    r = act(game, "choose_rest_option", index=1)
+    assert r["status"] == "ok" and r["state"]["state_type"] == "deck_upgrade"
+    r = act(game, "select_deck_card", card_index=0)
+    if r["state"]["state_type"] == "deck_upgrade":
+        r = act(game, "confirm")
+    assert r["status"] == "ok" and r["state"]["state_type"] == "rest_site"
+    assert rest_options(r["state"]) == [("HEAL", False), ("SMITH", False), ("LEAVE", True)]
+    assert act(game, "choose_rest_option", index=0)["status"] == "error"
+    assert act(game, "leave_rest_site")["state"]["state_type"] == "map"
+
+
+def test_rest_site_after_heal_lists_only_proceed(game):
+    rest_site(game)
+    r = act(game, "choose_rest_option", index=0)
+    assert r["status"] == "ok" and rest_options(r["state"]) == [("LEAVE", True)]
+
+
+def test_smith_with_nothing_to_upgrade_is_listed_but_refused(game):
+    """A model-disabled option keeps an enabled, unclickable button (NRestSiteButton): the mod
+    lists it enabled and choosing it fails, as live (sight-live ep 44 t=117-119)."""
+    start(game)
+    for _ in range(30):
+        game.send({"cmd": "enter_room", "type": "rest_site"})
+        state = game.send({"cmd": "flysts_state"})["state"]
+        assert rest_options(state) == [("HEAL", True), ("SMITH", True), ("LEAVE", False)]
+        r = act(game, "choose_rest_option", index=1)
+        if r["status"] == "error":
+            break
+        r = act(game, "select_deck_card", card_index=0)
+        if r["state"]["state_type"] == "deck_upgrade":
+            act(game, "confirm")
+    else:
+        pytest.fail("the deck never ran out of upgradable cards")
+    assert "is disabled" in r["error"] and r["state"] == state
+
+
+def test_content_catalog(game):
+    cat = game.send({"cmd": "content_catalog"})
+    assert cat["type"] == "content_catalog"
+    assert len(cat["characters"]) == 5
+    ids = {c["id"] for c in cat["cards"]}
+    assert {"STRIKE_IRONCLAD", "BASH"} <= ids
+    assert "NUTRITIOUS_OYSTER" in {r["id"] for r in cat["relics"]}
+    assert "NEOW" in {e["id"] for e in cat["events"]}
+    assert all({"id", "act", "room_type"} <= set(e) for e in cat["encounters"])
+
+
+def test_fake_merchant_lists_no_options(game):
+    """Its custom layout (NFakeMerchant) is no NEventLayout: the mod reads no option buttons,
+    not even a finished event's Proceed (docs/flysts_payload.md, known differences)."""
+    start(game)
+    game.send({"cmd": "enter_room", "type": "event", "event": "FAKE_MERCHANT"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert state["state_type"] == "event" and state["event_id"] == "FAKE_MERCHANT"
+    assert state["options"] == []
+    r = act(game, "choose_event_option", index=0)
+    assert r["status"] == "error" and r["state"] == state
+
+
+def test_kaiser_crab_fight_runs(game):
+    """Its arms (Crusher, Rocket) animate the boss body in the combat room's background; headless
+    that threw on spawn and the fight ended at once (live FMT1751 floor 33, 2026-09-26)."""
+    start(game)
+    game.send({"cmd": "set_player", "hp": 9999, "max_hp": 9999})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "KAISER_CRAB_BOSS"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert state["state_type"] == "boss" and state["encounter_id"] == "KAISER_CRAB_BOSS"
+    assert [m["id"] for m in state["monsters"]] == ["CRUSHER", "ROCKET"]
+    hp = state["player"]["hp"]
+    for _ in range(4):
+        state = act(game, "end_turn")["state"]
+    assert state["state_type"] == "boss" and state["round"] == 5 and state["player"]["hp"] < hp
+
+
+def test_lords_parasol_buys_the_whole_shop(game):
+    """Entering a shop with Lord's Parasol buys every card, relic and potion for free, then opens
+    the card removal (not cancelable). Headless the relic loop threw on the top bar (2026-09-26).
+    A bought relic can open its own screens first (FLYS1's shop sells Orrery: 5 card rewards)."""
+    start(game)
+    game.send({"cmd": "set_player", "relics": ["BURNING_BLOOD", "LORDS_PARASOL"], "gold": 0})
+    game.send({"cmd": "enter_room", "type": "shop"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    removal = False
+    for _ in range(40):
+        st = state["state_type"]
+        if st == "shop":
+            break
+        if st == "menu":
+            r = act(game, "menu_select", option=state["options"][0])
+        elif st == "card_reward":
+            r = act(game, "select_card_reward", card_index=0)
+        elif st == "deck_card_select":
+            removal = True
+            r = act(game, "select_deck_card", card_index=0)
+            if r["state"]["state_type"] == "deck_card_select":
+                r = act(game, "confirm")
+        else:
+            pytest.fail(f"unexpected state {st}")
+        assert r["status"] == "ok", r
+        state = r["state"]
+    assert state["state_type"] == "shop" and removal
+    assert not [i for i in state["items"] if i.get("kind") in ("card", "relic", "potion") and i.get("in_stock")]

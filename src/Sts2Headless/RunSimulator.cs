@@ -2434,20 +2434,18 @@ public partial class RunSimulator
                 }
             }
 
-            // Use CurrentStarCost (combat-modified) for UI/can_play; BaseStarCost ignores temporary reductions.
-            var starCost = c.CurrentStarCost;
+            // The star cost the game charges: GetStarCostWithModifiers applies Hook.ModifyStarCost on
+            // top of CurrentStarCost (temporary costs). CanPlay checks it already
+            // (PlayerCombatState.HasEnoughResourcesFor); an override on the unmodified cost refused
+            // Regent cards a modifier had made free (soak 2026-09-26, Neutron Aegis 5 -> 0).
+            var starCost = c.GetStarCostWithModifiers();
             var cardInfo = CardInfo(c, PileType.Hand, upgradePreview: false);
             cardInfo["index"] = i;
             cardInfo["can_play"] = c.CanPlay(out _, out _);
             cardInfo["target_type"] = c.TargetType.ToString();
             cardInfo["stats"] = stats.Count > 0 ? stats : null;
             if (starCost > 0)
-            {
                 cardInfo["star_cost"] = starCost;
-                // BUG-007: Override can_play for star-cost cards when player lacks stars
-                if (pcs != null && pcs.Stars < starCost)
-                    cardInfo["can_play"] = false;
-            }
             if (damageByTarget != null && damageByTarget.Count > 0)
                 cardInfo["damage_by_target"] = damageByTarget;
             return cardInfo;
