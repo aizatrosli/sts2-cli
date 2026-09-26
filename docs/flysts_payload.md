@@ -30,7 +30,9 @@ this mode is always a manual-flow run, and every engine step still goes through
   it), event (per act / shared / ancient), encounter, monster and power in ModelDb. flysts's
   `tools/cli_coverage.py` uses it as the coverage denominator.
 - The debug commands (`enter_room`, `set_player`, `set_draw_order`; engine `--debug`) work in
-  this mode: the payload re-reads the decision after them.
+  this mode: the payload re-reads the decision after them. A failing one returns its own error
+  (unknown encounter, event, relic, card or potion) and changes nothing: `set_player` resolves
+  every id before it touches the player.
 
 ## Run creation (FlystsProfile, `RunSimulator.Flysts.cs`)
 
@@ -43,6 +45,10 @@ Built the way the game builds a new run for that profile (`NGame.StartNewSinglep
   every boot);
 - acts rolled from the seed with the game's rule, including the forced undiscovered alternative
   act that TestMode would skip (`ActModel.GetRandomList`);
+- what the mod's lobby refuses is refused with its text: a character the profile has not
+  unlocked (`UnlockState.Characters`: "Character 'X' is locked"), and an ascension above the
+  lobby's max, which is the character's max ascension once its ascension epoch (the 4th) is
+  revealed and 0 before ("Ascension N out of range (max unlocked for this character: M)");
 - `RunState.CreateForNewRun` (the starting deck gets `AfterCreated`), the game mode as given,
   ascension capped at the character's max ascension in the profile;
 - `StartedWithNeow` follows the Neow epoch (`SetStartedWithNeowFlag`), not forced;
@@ -88,6 +94,15 @@ like the screens (same result order), and sends the result through `select_cards
 `select_bundle` when the screen would complete. In this mode the selector no longer
 auto-resolves a single forced option (the game still shows that screen).
 
+A selection opened by a hook (a `HookPlayerChoiceContext`: Gambling Chip, Toolbox, Choices
+Paradox, Tools of the Trade, Tyranny, Foregone Conclusion, Entropy at turn start; retain
+prompts at turn end) signals its player choice before the selector, as the game's own path does
+before its UI (`SignalPlayerChoiceBegun` / `SignalPlayerChoiceEnded`). The rest of the hook then
+runs as a `GenericHookGameAction`, so the turn start carries on first (`AfterSideTurnStart`,
+orbs, the executor unpaused) and the prompt shows that state with `resolving` true (captured
+on the game: Brimstone's Strength is applied at Gambling Chip's prompt). The default protocol
+keeps the selector's blocking order.
+
 ## Actions
 
 `play_card {card_index, target}`, `end_turn`, `use_potion {slot, target}` (belt slot),
@@ -97,6 +112,11 @@ auto-resolves a single forced option (the game still shows that screen).
 `select_bundle {index}`, `choose_card {card_index}`, `select_deck_card {card_index}`,
 `select_hand_card {card_index}`, `confirm`, `cancel_selection`, `abandon_run`,
 `set_fast_mode` (no-op). Targets are 0-based indices into the alive enemies.
+
+`use_potion` while a selection is open (a hand prompt, a choose-a-card or pile screen, a card
+reward) enqueues the potion like the mod (`PotionModel.EnqueueManualUse`) when its usability rule
+passes: the slot reads `usable: false` while queued and the potion runs after the selection
+(captured on the game: Strength Potion on Attack Potion's screen).
 
 ## Known differences from the live game
 

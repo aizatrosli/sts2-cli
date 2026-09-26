@@ -239,3 +239,70 @@ def test_trial_double_down_changes_nothing(game):
     assert r["state"]["options"] == page["options"] and r["state"]["player"] == page["player"]
     r = act(game, "choose_event_option", index=0)  # Accept
     assert [o["text_key"].split(".")[-1] for o in r["state"]["options"]] == ["GUILTY", "INNOCENT"]
+
+
+def _combat_view(state):
+    player = state["player"]
+    return ([(p["id"], p["amount"]) for p in player["powers"]],
+            [[(p["id"], p["amount"]) for p in m["powers"]] for m in state["monsters"]])
+
+
+def test_turn_start_hook_selection_opens_after_the_other_turn_start_hooks(game):
+    """Gambling Chip's prompt opens once the turn start has run on (captured on the game): the
+    hook signals its player choice, so Brimstone's Strength is already applied at the prompt and
+    the prompt's action is running (`resolving`)."""
+    start(game)
+    game.send({"cmd": "set_player", "relics": ["BURNING_BLOOD", "GAMBLING_CHIP", "BRIMSTONE"]})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "NIBBITS_WEAK"})
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert state["hand_selection"] == "simple_select" and state["resolving"] is True
+    assert _combat_view(state) == ([("STRENGTH_POWER", 2)], [[("STRENGTH_POWER", 1)]])
+    r = act(game, "confirm")
+    assert r["status"] == "ok" and r["state"]["is_play_phase"] and not r["state"]["hand_selection"]
+
+
+def test_potion_used_during_a_selection_is_queued(game):
+    """The mod enqueues a usable potion on any screen; the game runs it after the open selection
+    (captured on the game: Strength Potion on Attack Potion's choose-a-card screen)."""
+    start(game)
+    game.send({"cmd": "set_player", "potions": ["ATTACK_POTION", "STRENGTH_POTION"]})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+    assert act(game, "use_potion", slot=0)["state"]["state_type"] == "choose_a_card"
+    r = act(game, "use_potion", slot=1)
+    assert r["status"] == "ok" and r["state"]["state_type"] == "choose_a_card"
+    slot = r["state"]["player"]["potion_slots_detail"][1]
+    assert slot["id"] == "STRENGTH_POTION" and slot["usable"] is False  # queued
+    r = act(game, "choose_card", card_index=0)
+    assert r["state"]["player"]["potion_slots_detail"][1]["id"] is None
+    assert ("STRENGTH_POWER", 2) in _combat_view(r["state"])[0]
+
+
+def test_lobby_refuses_a_locked_character_and_ascension_above_max(game, tmp_path):
+    """What the mod's lobby refuses (MenuAutomation): a locked character, and an ascension above
+    the character's max (0 until its ascension epoch is revealed)."""
+    import json
+    progress = json.load(open(PROFILE))
+    for e in progress["epochs"]:
+        if e["id"] == "SILENT1_EPOCH":
+            e["state"] = "not_obtained"
+    for c in progress["character_stats"]:
+        c["max_ascension"] = 0
+    locked = tmp_path / "progress.save"
+    locked.write_text(json.dumps(progress))
+    base = {"cmd": "start_run", "payload": "flysts", "seed": "LOCK1", "profile": str(locked)}
+    r = game.send({**base, "character": "Silent"})
+    assert r["type"] == "error" and r["message"] == "Character 'Silent' is locked"
+    r = game.send({**base, "character": "Ironclad", "ascension": 1})
+    assert r["type"] == "error" and r["message"] == "Ascension 1 out of range (max unlocked for this character: 0)"
+    assert game.send({**base, "character": "Ironclad"})["type"] == "flysts"
+
+
+def test_debug_commands_report_their_errors_and_change_nothing(game):
+    before = start(game)["state"]
+    for cmd in ({"cmd": "enter_room", "type": "combat", "encounter": "NOT_AN_ENCOUNTER"},
+                {"cmd": "set_player", "relics": ["NOT_A_RELIC"]},
+                {"cmd": "set_player", "deck": ["NOT_A_CARD", "BASH"], "gold": 1},
+                {"cmd": "set_player", "potions": ["NOT_A_POTION"]}):
+        r = game.send(cmd)
+        assert r["type"] == "error" and "Unknown" in r["message"], (cmd, r)
+    assert game.send({"cmd": "flysts_state"})["state"] == before

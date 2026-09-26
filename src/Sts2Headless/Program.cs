@@ -249,7 +249,7 @@ class Program
                 foreach (var prop in cmd.EnumerateObject())
                     if (prop.Name != "cmd") args[prop.Name] = prop.Value;
                 var setPlayer = sim.SetPlayer(args);
-                return sim.FlystsRefreshAfterDebug() ?? setPlayer;
+                return IsError(setPlayer) ? setPlayer : sim.FlystsRefreshAfterDebug() ?? setPlayer;
             }
 
             case "enter_room":
@@ -258,7 +258,7 @@ class Program
                 var encounter = cmd.TryGetProperty("encounter", out var enc) ? enc.GetString() : null;
                 var eventId = cmd.TryGetProperty("event", out var ev) ? ev.GetString() : null;
                 var entered = sim.EnterRoom(roomType, encounter, eventId);
-                return sim.FlystsRefreshAfterDebug() ?? entered;
+                return IsError(entered) ? entered : sim.FlystsRefreshAfterDebug() ?? entered;
             }
 
             case "set_draw_order":
@@ -268,7 +268,7 @@ class Program
                     foreach (var c in cardsArr.EnumerateArray())
                         cards.Add(c.GetString() ?? "");
                 var ordered = sim.SetDrawOrder(cards);
-                return sim.FlystsRefreshAfterDebug() ?? ordered;
+                return IsError(ordered) ? ordered : sim.FlystsRefreshAfterDebug() ?? ordered;
             }
 
             case "write_continue_save":
@@ -314,6 +314,11 @@ class Program
                 return new Dictionary<string, object?> { ["type"] = "error", ["message"] = $"Unknown command: {cmdType}" };
         }
     }
+
+    /// <summary>A command's own error, returned as is: the flysts refresh after a debug command
+    /// would otherwise replace it with the unchanged decision and a plain ok.</summary>
+    static bool IsError(Dictionary<string, object?> result) =>
+        result.TryGetValue("type", out var t) && t as string == "error";
 
     static void WriteLine(Dictionary<string, object?> data)
     {

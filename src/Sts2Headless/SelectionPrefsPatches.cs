@@ -26,6 +26,8 @@ internal static class SelectionPrefsPatches
         public MegaCrit.Sts2.Core.Models.EnchantmentModel? Enchantment { get; init; }
         public int? EnchantmentAmount { get; init; }
         public MegaCrit.Sts2.Core.Entities.Cards.PileType? PileType { get; init; }
+        /// <summary>The PlayerChoiceContext the entry point was given (combat selections only).</summary>
+        public MegaCrit.Sts2.Core.GameActions.Multiplayer.PlayerChoiceContext? Context { get; init; }
     }
 
     private static Info? _next;
@@ -65,6 +67,7 @@ internal static class SelectionPrefsPatches
         bool requireManual = false;
         MegaCrit.Sts2.Core.Models.EnchantmentModel? enchantment = null;
         MegaCrit.Sts2.Core.Entities.Cards.PileType? pileType = null;
+        MegaCrit.Sts2.Core.GameActions.Multiplayer.PlayerChoiceContext? context = null;
         var parameters = __originalMethod.GetParameters();
         for (int i = 0; i < parameters.Length && i < __args.Length; i++)
         {
@@ -96,6 +99,10 @@ internal static class SelectionPrefsPatches
             {
                 pileType = pile.Type;
             }
+            else if (__args[i] is MegaCrit.Sts2.Core.GameActions.Multiplayer.PlayerChoiceContext ctx)
+            {
+                context = ctx;
+            }
         }
         var source = __originalMethod.Name.StartsWith("From", StringComparison.Ordinal) ? __originalMethod.Name[4..] : __originalMethod.Name;
         _next = new Info(source, cancelable, canSkip, string.IsNullOrWhiteSpace(prompt) ? null : prompt)
@@ -108,6 +115,7 @@ internal static class SelectionPrefsPatches
             Enchantment = enchantment,
             EnchantmentAmount = enchantmentAmount,
             PileType = pileType,
+            Context = context,
         };
     }
 }

@@ -342,6 +342,42 @@ public partial class RunSimulator
             if (_runState == null) return Error("No run in progress");
             var player = _runState.Players[0];
 
+            // Resolve every id before changing anything: an unknown relic, card or potion leaves
+            // the player untouched (a card id used to throw after the deck was already cleared).
+            List<CardModel>? wantedDeck = null;
+            if (args.TryGetValue("deck", out var deckCheckEl))
+            {
+                wantedDeck = new List<CardModel>();
+                foreach (var cEl in deckCheckEl.EnumerateArray())
+                {
+                    var id = cEl.GetString();
+                    if (id == null) continue;
+                    var canonical = ModelDb.GetByIdOrNull<CardModel>(new ModelId("CARD", id));
+                    if (canonical == null) return Error($"Unknown card: {id}");
+                    wantedDeck.Add(canonical);
+                }
+            }
+            if (args.TryGetValue("potions", out var potionsCheckEl))
+                foreach (var pEl in potionsCheckEl.EnumerateArray())
+                {
+                    var id = pEl.GetString();
+                    if (id != null && ModelDb.GetByIdOrNull<PotionModel>(new ModelId("POTION", id)) == null)
+                        return Error($"Unknown potion: {id}");
+                }
+            List<RelicModel>? wantedRelics = null;
+            if (args.TryGetValue("relics", out var relicsCheckEl))
+            {
+                wantedRelics = new List<RelicModel>();
+                foreach (var rEl in relicsCheckEl.EnumerateArray())
+                {
+                    var id = rEl.GetString();
+                    if (id == null) continue;
+                    var model = ModelDb.AllRelics.FirstOrDefault(r => string.Equals(r.Id.Entry, id, StringComparison.OrdinalIgnoreCase));
+                    if (model == null) return Error($"Unknown relic: {id}");
+                    wantedRelics.Add(model);
+                }
+            }
+
             if (args.TryGetValue("hp", out var hpEl) && player.Creature != null)
                 SetField(player.Creature, "_currentHp", hpEl.GetInt32());
             if (args.TryGetValue("max_hp", out var mhpEl) && player.Creature != null)
@@ -349,18 +385,9 @@ public partial class RunSimulator
             if (args.TryGetValue("gold", out var goldEl))
                 player.Gold = goldEl.GetInt32();
 
-            if (args.TryGetValue("relics", out var relicsEl))
+            if (wantedRelics != null)
             {
-                // Resolve every id first so an unknown one leaves the relics untouched.
-                var wanted = new List<RelicModel>();
-                foreach (var rEl in relicsEl.EnumerateArray())
-                {
-                    var id = rEl.GetString();
-                    if (id == null) continue;
-                    var model = ModelDb.AllRelics.FirstOrDefault(r => string.Equals(r.Id.Entry, id, StringComparison.OrdinalIgnoreCase));
-                    if (model == null) return Error($"Unknown relic: {id}");
-                    wanted.Add(model);
-                }
+                var wanted = wantedRelics;
                 // Owner-aware add/remove (a bare list insert left relics without an owner, and every
                 // later hook threw). This sets state only: pickup effects (AfterObtained) do not run.
                 foreach (var r in player.Relics.ToList())
@@ -368,23 +395,17 @@ public partial class RunSimulator
                 foreach (var model in wanted)
                     player.AddRelicInternal(model.ToMutable(), silent: true);
             }
-            if (args.TryGetValue("deck", out var deckEl))
+            if (wantedDeck != null)
             {
                 // Remove existing cards from RunState tracking
                 foreach (var c in player.Deck.Cards.ToList())
                     _runState.RemoveCard(c);
                 player.Deck.Clear(silent: true);
                 // Add new cards via RunState.CreateCard (sets Owner + registers)
-                foreach (var cEl in deckEl.EnumerateArray())
+                foreach (var canonical in wantedDeck)
                 {
-                    var id = cEl.GetString();
-                    if (id == null) continue;
-                    var canonical = ModelDb.GetById<CardModel>(new ModelId("CARD", id));
-                    if (canonical != null)
-                    {
-                        var card = _runState.CreateCard(canonical, player);
-                        player.Deck.AddInternal(card, silent: true);
-                    }
+                    var card = _runState.CreateCard(canonical, player);
+                    player.Deck.AddInternal(card, silent: true);
                 }
             }
             if (args.TryGetValue("potions", out var potionsEl))
@@ -444,7 +465,7 @@ public partial class RunSimulator
                 {
                     if (string.IsNullOrEmpty(encounter))
                         encounter = "SHRINKER_BEETLE_WEAK"; // default encounter
-                    var encModel = ModelDb.GetById<EncounterModel>(new ModelId("ENCOUNTER", encounter));
+                    var encModel = ModelDb.GetByIdOrNull<EncounterModel>(new ModelId("ENCOUNTER", encounter));
                     if (encModel == null) return Error($"Unknown encounter: {encounter}");
                     room = new CombatRoom(encModel.ToMutable(), runState);
                     break;
@@ -460,7 +481,7 @@ public partial class RunSimulator
                 {
                     if (string.IsNullOrEmpty(eventId))
                         return Error("event requires 'event' parameter (e.g. CHANGELING_GROVE)");
-                    var evModel = ModelDb.GetById<EventModel>(new ModelId("EVENT", eventId));
+                    var evModel = ModelDb.GetByIdOrNull<EventModel>(new ModelId("EVENT", eventId));
                     if (evModel == null) return Error($"Unknown event: {eventId}");
                     room = new EventRoom(evModel);
                     break;
@@ -3155,6 +3176,8 @@ public partial class RunSimulator
                 {
                     _syncCtx.Pump();
                     if (!executor.IsRunning) break;
+                    // a hook action the executor is running can open a selection (flysts mode)
+                    if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
                     Thread.Sleep(1);
                 }
             }
@@ -3629,6 +3652,40 @@ public partial class RunSimulator
             if (optList.Count == 1 && minSelect >= 1 && !cancelable && !FlystsMode)
                 return Task.FromResult<IEnumerable<CardModel>>(optList);
 
+            // A selection a hook opens (Gambling Chip, Toolbox, Tools of the Trade at turn start;
+            // retain prompts at turn end) signals the player choice before its UI, as the game's
+            // non-selector path does: SignalPlayerChoiceBegun hands the rest of the hook to a
+            // GenericHookGameAction, so the turn start carries on (AfterSideTurnStart, orbs, the
+            // action executor unpaused) and the prompt opens only when that action runs. The
+            // selector path skips the signal, and the whole turn start blocked on the prompt
+            // (captured live 2026-09-27: Brimstone's Strength is already applied at Gambling
+            // Chip's prompt, `resolving` true). flysts payload mode only: the default protocol
+            // keeps its recorded trajectories.
+            if (FlystsMode && info?.Context is MegaCrit.Sts2.Core.GameActions.Multiplayer.HookPlayerChoiceContext hook)
+            {
+                var choiceOptions = info.Source is "Hand" or "HandForDiscard" or "HandForUpgrade"
+                    ? MegaCrit.Sts2.Core.Entities.Multiplayer.PlayerChoiceOptions.CancelPlayCardActions
+                    : MegaCrit.Sts2.Core.Entities.Multiplayer.PlayerChoiceOptions.None;
+                return SelectAfterSignal(hook, choiceOptions, optList, minSelect, maxSelect, cancelable, info);
+            }
+
+            return SetPending(optList, minSelect, maxSelect, cancelable, info);
+        }
+
+        private async Task<IEnumerable<CardModel>> SelectAfterSignal(
+            MegaCrit.Sts2.Core.GameActions.Multiplayer.HookPlayerChoiceContext hook,
+            MegaCrit.Sts2.Core.Entities.Multiplayer.PlayerChoiceOptions choiceOptions,
+            List<CardModel> optList, int minSelect, int maxSelect, bool cancelable, SelectionPrefsPatches.Info? info)
+        {
+            await hook.SignalPlayerChoiceBegun(choiceOptions);
+            var selected = await SetPending(optList, minSelect, maxSelect, cancelable, info);
+            await hook.SignalPlayerChoiceEnded();
+            return selected;
+        }
+
+        private Task<IEnumerable<CardModel>> SetPending(
+            List<CardModel> optList, int minSelect, int maxSelect, bool cancelable, SelectionPrefsPatches.Info? info)
+        {
             // Store pending selection and wait
             PendingOptions = optList;
             PendingMinSelect = minSelect;

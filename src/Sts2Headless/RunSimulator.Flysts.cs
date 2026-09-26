@@ -240,6 +240,17 @@ public partial class RunSimulator
 
     // ---- run creation --------------------------------------------------------
 
+    /// <summary>StartRunLobby.IsAscensionEpochRevealed: each character's 4th epoch unlocks ascension.</summary>
+    private static bool AscensionEpochRevealed(CharacterModel character) => character switch
+    {
+        MegaCrit.Sts2.Core.Models.Characters.Ironclad => SaveManager.Instance.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.Ironclad4Epoch>(),
+        MegaCrit.Sts2.Core.Models.Characters.Silent => SaveManager.Instance.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.Silent4Epoch>(),
+        MegaCrit.Sts2.Core.Models.Characters.Regent => SaveManager.Instance.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.Regent4Epoch>(),
+        MegaCrit.Sts2.Core.Models.Characters.Defect => SaveManager.Instance.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.Defect4Epoch>(),
+        MegaCrit.Sts2.Core.Models.Characters.Necrobinder => SaveManager.Instance.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.Necrobinder4Epoch>(),
+        _ => true,
+    };
+
     /// <summary>
     /// start_run {payload: "flysts"}: a new run built the way the game's custom/standard lobby
     /// builds one for this save profile (NGame.StartNewSingleplayerRun): the profile's progress is
@@ -279,6 +290,19 @@ public partial class RunSimulator
             // The lobby carries each player's unlock state serialized (LobbyPlayer.unlockState).
             var unlocks = UnlockState.FromSerializable(SaveManager.Instance.GenerateUnlockStateFromProgress().ToSerializable());
             var characterModel = FlystsCharacter(character);
+            // The mod's lobby refuses what the game's character screen would (MenuAutomation):
+            // a locked character's button (UnlockState.Characters), and on the custom screen an
+            // ascension above the lobby's max (StartRunLobby.SetSingleplayerAscensionAfterCharacterChanged:
+            // the character's MaxAscension, or 0 until its ascension epoch is revealed).
+            if (!unlocks.Characters.Contains(characterModel))
+                return Error($"Character '{character}' is locked");
+            if (ascension != 0)
+            {
+                var stats = progress.GetOrCreateCharacterStats(characterModel.Id);
+                int lobbyMax = stats.MaxAscension > 0 && AscensionEpochRevealed(characterModel) ? stats.MaxAscension : 0;
+                if (ascension < 0 || ascension > lobbyMax)
+                    return Error($"Ascension {ascension} out of range (max unlocked for this character: {lobbyMax})");
+            }
             var acts = FlystsRollActs(seedStr, unlocks, progress);
             // StartRunLobby.BeginRunLocally: singleplayer ascension is capped at the character's max.
             int maxAscension = progress.GetOrCreateCharacterStats(characterModel.Id).MaxAscension;
@@ -862,6 +886,33 @@ public partial class RunSimulator
         var potion = slots[slot.Value];
         if (potion == null) return (null, $"Potion slot {slot} is empty");
         if (!FlystsPotionUsable(potion)) return (null, $"Potion {potion.Id.Entry} is not usable now");
+        if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
+        {
+            // A selection is open (Attack Potion's choose-a-card, a card reward, a hand prompt):
+            // the native gate offers no potions there, but the mod enqueues the use whenever its
+            // usability rule passes (GameActions.UsePotion -> PotionModel.EnqueueManualUse), and the
+            // game queues it behind the selection (captured live 2026-09-27: Strength Potion used
+            // on Attack Potion's screen shows IsQueued, then applies after the pick).
+            Creature? target = null;
+            if (potion.TargetType == TargetType.AnyEnemy)
+            {
+                var cs = CombatManager.Instance.DebugOnlyGetState();
+                if (cs == null) return (null, "Potion needs an enemy target but there is no combat");
+                var aliveEnemies = cs.Enemies.Where(e => e.IsAlive).ToList();
+                int? t = ArgInt(args, "target");
+                if (t == null || t < 0 || t >= aliveEnemies.Count) return (null, "Potion requires 'target': a 0-based index into alive enemies");
+                target = aliveEnemies[t.Value];
+            }
+            else if (potion.TargetType.IsSingleTarget())
+            {
+                target = player.Creature;
+            }
+            if (target != null && !potion.IsValidTarget(target)) return (null, $"Invalid target for {potion.Id.Entry}");
+            potion.EnqueueManualUse(target);
+            _syncCtx.Pump();
+            WaitForActionExecutor();
+            return ($"Using potion {potion.Id.Entry} from slot {slot}", null);
+        }
         // sts2-cli indexes the belt without its empty slots (Player.Potions).
         int potionIndex = slots.Take(slot.Value).Count(p => p != null);
         var nativeArgs = new Dictionary<string, object?> { ["potion_index"] = potionIndex };
