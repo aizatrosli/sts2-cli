@@ -75,6 +75,9 @@ DLLS=(
 
 echo ""
 echo "📦 Copying DLLs to lib/..."
+# DLLs this game build does not ship (e.g. Sentry.Godot.dll before v0.111), so play.py does not
+# re-run setup for them on every launch.
+: > lib/.not_shipped
 for dll in "${DLLS[@]}"; do
     src="$GAME_DIR/$dll"
     if [ -f "$src" ]; then
@@ -88,7 +91,8 @@ for dll in "${DLLS[@]}"; do
             cp "$found" "lib/$dll"
             echo "    → found at $found"
         else
-            echo "    ⚠ Skipped (may cause build errors)"
+            echo "    ⚠ Skipped (not shipped by this game build)"
+            echo "$dll" >> lib/.not_shipped
         fi
     fi
 done
@@ -109,12 +113,16 @@ fi
 
 # ── Detect .NET SDK ──
 
+# Same search order as python/engine.py: $DOTNET, $DOTNET_ROOT, ~/.dotnet, ~/.dotnet-arm64, PATH.
+USER_DOTNET="${DOTNET:+$(command -v "$DOTNET" 2>/dev/null || echo "$DOTNET")}"
 DOTNET=""
-if [ -x "$HOME/.dotnet-arm64/dotnet" ]; then
-    DOTNET="$HOME/.dotnet-arm64/dotnet"
-elif command -v dotnet &>/dev/null; then
-    DOTNET="dotnet"
-fi
+for candidate in "$USER_DOTNET" "${DOTNET_ROOT:+$DOTNET_ROOT/dotnet}" \
+                 "$HOME/.dotnet/dotnet" "$HOME/.dotnet-arm64/dotnet" "$(command -v dotnet 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version &>/dev/null; then
+        DOTNET="$candidate"
+        break
+    fi
+done
 
 if [ -z "$DOTNET" ]; then
     echo ""
@@ -168,34 +176,8 @@ var module = ModuleDefinition.ReadModule(dllPath, new ReaderParameters {
 
 int patches = 0;
 
-// Patch 1: Task.Yield() — make YieldAwaitable.YieldAwaiter.IsCompleted return true
-// This prevents async deadlocks in headless mode
-foreach (var type in module.Types)
-{
-    foreach (var nested in type.NestedTypes)
-    {
-        foreach (var nested2 in nested.NestedTypes)
-        {
-            if (nested2.Name.Contains("YieldAwaiter") || nested2.Name == "<>c")
-            {
-                foreach (var method in nested2.Methods)
-                {
-                    if (method.Name == "get_IsCompleted" && method.Body != null)
-                    {
-                        var il = method.Body.GetILProcessor();
-                        il.Body.Instructions.Clear();
-                        il.Emit(OpCodes.Ldc_I4_1);
-                        il.Emit(OpCodes.Ret);
-                        patches++;
-                        Console.WriteLine($"  Patched {type.Name}.{nested.Name}.{nested2.Name}.IsCompleted");
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Patch 2: WaitUntilQueueIsEmptyOrWaitingOnNonPlayerDrivenAction → return Task.CompletedTask
+// WaitUntilQueueIsEmptyOrWaitingOnNonPlayerDrivenAction → return Task.CompletedTask
+// (Task.Yield is handled at runtime by a Harmony patch in RunSimulator, not here.)
 foreach (var type in module.Types)
 {
     foreach (var method in type.Methods)
@@ -217,17 +199,29 @@ foreach (var type in module.Types)
 }
 
 Console.WriteLine($"Applied {patches} patches");
+if (patches != 1)
+{
+    // The target moved or was renamed in a game update: fail instead of shipping an unpatched dll.
+    Console.Error.WriteLine($"ERROR: expected exactly 1 IL patch, applied {patches}. Update setup.sh for this game version.");
+    return 1;
+}
 var outPath = dllPath + ".patched";
 module.Write(outPath);
 module.Dispose();
 File.Delete(dllPath);
 File.Move(outPath, dllPath);
 Console.WriteLine("Done!");
+return 0;
 CSHARP
 
 REPO_DIR="$(pwd)"
 cd "$PATCH_DIR"
-$DOTNET run -- "$REPO_DIR/lib/sts2.dll" 2>&1
+if ! $DOTNET run -- "$REPO_DIR/lib/sts2.dll" 2>&1; then
+    cd "$REPO_DIR"
+    rm -rf "$PATCH_DIR"
+    echo "❌ IL patching failed (see above)."
+    exit 1
+fi
 cd "$REPO_DIR"
 rm -rf "$PATCH_DIR"
 

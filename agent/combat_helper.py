@@ -94,7 +94,7 @@ def fight(d=None):
     if d is None: d = action("end_turn")
     for _ in range(200):
         dec = d.get("decision", d.get("type", ""))
-        if dec in ("card_reward", "game_over", "map_select", "rest_site", "shop", "event_choice", "bundle_select"):
+        if dec in ("card_reward", "game_over", "map_select", "rest_site", "shop", "fake_merchant", "event_choice", "bundle_select"):
             return d
         if dec == "card_select":
             n = d.get("min_select", 1)
@@ -109,10 +109,11 @@ def fight(d=None):
         blk = d.get("player",{}).get("block",0) if "player" in d else 0
         inc = calc_incoming(enemies)
         # Use potions when critical
-        potions = d.get("potions", [])
+        potions = d.get("player", {}).get("potions", [])
         if potions and (hp < 20 or (inc > hp and blk == 0)):
             for pi, pot in enumerate(potions):
-                pname = pot.get("name", {}).get("en", "")
+                pi = pot.get("index", pi)
+                pname = pot.get("name") or ""
                 ptt = pot.get("target_type", "")
                 if "Heal" in pname or "Block" in pname or "Regen" in pname or "Fairy" in pname:
                     r = action("use_potion", potion_index=pi)
@@ -145,7 +146,7 @@ if __name__ == "__main__":
     if dec == "card_reward":
         print(f"WIN HP={p.get('hp')}/{p.get('max_hp')} g={p.get('gold')}")
         for c in result.get("cards", []):
-            print(f"  C{c['index']}: {c['name']['zh']}({c.get('cost','?')}) {c.get('rarity','')} {c['type']} {c.get('stats',{})}")
+            print(f"  C{c['index']}: {c['name']}({c.get('cost','?')}) {c.get('rarity','')} {c['type']} {c.get('stats',{})}")
     elif dec == "game_over":
         print(f"DEAD HP={p.get('hp')}")
     else:

@@ -26,17 +26,9 @@ from game_log import GameLogger
 
 VALID_CHARACTERS = ["Ironclad", "Silent", "Defect", "Regent", "Necrobinder"]
 
-def _find_dotnet():
-    for p in [os.path.expanduser("~/.dotnet-arm64/dotnet"),
-              os.path.expanduser("~/.dotnet/dotnet"), "dotnet"]:
-        try:
-            if subprocess.run([p, "--version"], capture_output=True, timeout=5).returncode == 0:
-                return p
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    return "dotnet"
+from engine import engine_command, find_dotnet  # noqa: E402  (python/engine.py)
 
-DOTNET = _find_dotnet()
+DOTNET = find_dotnet()
 PROJECT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "src", "Sts2Headless", "Sts2Headless.csproj")
 
@@ -46,7 +38,7 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
     rng = random.Random(seed)
     logger = GameLogger(character, seed, enabled=log)
     proc = subprocess.Popen(
-        [DOTNET, "run", "--no-build", "--project", PROJECT],
+        engine_command(DOTNET),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL if not verbose else None,
@@ -254,16 +246,26 @@ def play_run(seed: str, character: str = "Ironclad", verbose: bool = True, log: 
                              "args": {"bundle_index": 0}})
 
             elif decision == "card_select":
-                # Auto-select first card
+                # Pick the first cards: at least one when allowed, never outside min..max
                 cards = state.get("cards", [])
-                if cards:
+                lo = state.get("min_select") or 0
+                hi = state.get("max_select") or 0
+                n = min(max(lo, 1), hi, len(cards))
+                if n > 0:
                     state = send({"cmd": "action", "action": "select_cards",
-                                 "args": {"indices": "0"}})
+                                 "args": {"indices": ",".join(str(i) for i in range(n))}})
                 else:
                     state = send({"cmd": "action", "action": "skip_select"})
 
-            elif decision == "shop":
+            elif decision in ("shop", "fake_merchant"):
                 state = send({"cmd": "action", "action": "leave_room"})
+
+            elif decision == "crystal_sphere":
+                # Crystal Sphere event minigame: divine the first hidden tile
+                grid = state.get("grid", [])
+                x, y = next((x, y) for y, row in enumerate(grid) for x, v in enumerate(row) if v == "?")
+                state = send({"cmd": "action", "action": "crystal_sphere_divine",
+                              "args": {"x": x, "y": y, "tool": "big"}})
 
             elif decision == "unknown":
                 state = send({"cmd": "action", "action": "proceed"})

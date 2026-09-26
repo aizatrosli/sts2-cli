@@ -37,7 +37,7 @@ errors retain inner exception details.
 The game test fixture now uses only `lib/`. Additional tests launch the real
 interactive program for all five characters with `STS2_GAME_DIR` unset and
 verify automatic repair is triggered for the missing dependency. The reported
-`cli_5005` seed successfully reached Neow through the normal Chinese launcher.
+`cli_5005` seed successfully reached Neow through the normal launcher.
 All five characters were also replayed five times using only `lib/`: 25/25
 normal game-over states. The lib-only full suite passed 69 tests; the additional
 auto-repair check passed in a targeted seven-test launcher run. Both `launch.py`

@@ -39,8 +39,25 @@ class Program
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "lib"));
     }
 
+    // The protocol channel: the process's real stdout. Console.Out is pointed at stderr so that
+    // anything else printing to stdout (e.g. Sentry's "GDExtension not loaded" notice) cannot
+    // corrupt the JSON-lines stream.
+    static readonly TextWriter Protocol = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = false };
+
+    /// <summary>Protocol schema version, reported in the ready message.</summary>
+    const int SchemaVersion = 2;
+
+    /// <summary>
+    /// Debug commands (set_player, enter_room, set_draw_order) edit the game state. They share the
+    /// channel an agent acts on, so they are only accepted when the engine is started with --debug
+    /// (or STS2_DEBUG_COMMANDS=1): an RL agent cannot reach them by accident.
+    /// </summary>
+    static bool DebugCommands;
+
     static void Main(string[] args)
     {
+        DebugCommands = args.Contains("--debug") || Environment.GetEnvironmentVariable("STS2_DEBUG_COMMANDS") == "1";
+        Console.SetOut(Console.Error);
         // Prevent unhandled exceptions from crashing the process
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
@@ -48,7 +65,7 @@ class Program
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
-            Console.Error.WriteLine($"[WARN] Unobserved task exception: {e.Exception}");
+            PatchReport.EngineWarning($"Unobserved task exception: {e.Exception?.GetBaseException().Message}");
             e.SetObserved();
         };
 
@@ -73,7 +90,13 @@ class Program
         };
 
         var sim = new RunSimulator();
-        WriteLine(new Dictionary<string, object?> { ["type"] = "ready", ["version"] = "0.2.0" });
+        WriteLine(new Dictionary<string, object?>
+        {
+            ["type"] = "ready",
+            ["version"] = "0.2.0",
+            ["schema_version"] = SchemaVersion,
+            ["debug_commands"] = DebugCommands,
+        });
 
         string? line;
         while ((line = Console.ReadLine()) != null)
@@ -82,10 +105,26 @@ class Program
             if (string.IsNullOrEmpty(line)) continue;
 
             Dictionary<string, object?>? result;
+            object? requestId = null;
             try
             {
                 var cmd = JsonSerializer.Deserialize<JsonElement>(line);
+                // Echoed back so a client can drop a late reply to a request it gave up on.
+                if (cmd.ValueKind == JsonValueKind.Object && cmd.TryGetProperty("request_id", out var rid))
+                    requestId = rid.ValueKind == JsonValueKind.Number && rid.TryGetInt64(out var n) ? n : rid.ToString();
+                // Anything but an action or a read may change state: the next action revalidates
+                // against a fresh legal set (actions refresh it themselves).
+                var cmdName = cmd.TryGetProperty("cmd", out var cn) && cn.ValueKind == JsonValueKind.String ? cn.GetString() : null;
+                if (cmdName is not ("action" or "get_map" or "flysts_state" or "flysts_action")) sim.InvalidateLegal();
+                if (cmdName is "start_run" or "load_save") PatchReport.DrainEngineWarnings(); // belong to the old run
                 result = HandleCommand(sim, cmd);
+                sim.AttachLegalActions(result);
+                sim.TrimSaveCallLog();
+                if (cmdName is "start_run" or "load_save") PatchReport.RemoveMonoModTempFiles();
+                var warnings = PatchReport.DrainEngineWarnings();
+                if (warnings.Count > 0 && result != null) result["warnings"] = warnings;
+                if (cmdName is "start_run" or "load_save" && result != null && PatchReport.Warnings.Count > 0)
+                    result["patch_warnings"] = PatchReport.Warnings;
             }
             catch (JsonException ex)
             {
@@ -98,6 +137,7 @@ class Program
 
             if (result != null)
             {
+                if (requestId != null) result["request_id"] = requestId;
                 WriteLine(result);
                 if (result.TryGetValue("type", out var resultTypeObj) &&
                     string.Equals(resultTypeObj as string, "quit_result", StringComparison.Ordinal))
@@ -111,14 +151,50 @@ class Program
     static Dictionary<string, object?>? HandleCommand(RunSimulator sim, JsonElement cmd)
     {
         var cmdType = cmd.GetProperty("cmd").GetString() ?? "";
+        if (cmdType is "set_player" or "enter_room" or "set_draw_order" && !DebugCommands)
+            return new Dictionary<string, object?>
+            {
+                ["type"] = "error",
+                ["message"] = $"'{cmdType}' is a debug command; start the engine with --debug (or STS2_DEBUG_COMMANDS=1)",
+            };
         switch (cmdType)
         {
+            case "start_run" when cmd.TryGetProperty("payload", out var payload) && payload.GetString() == "flysts":
+                // The FlystsBridge mod's payload and actions (flysts_state / flysts_action).
+                return sim.StartFlystsRun(
+                    cmd.TryGetProperty("character", out var fch) ? fch.GetString() ?? "Ironclad" : "Ironclad",
+                    cmd.TryGetProperty("ascension", out var fasc) ? fasc.GetInt32() : 0,
+                    cmd.TryGetProperty("seed", out var fs) ? fs.GetString() : null,
+                    cmd.TryGetProperty("game_mode", out var fgm) ? fgm.GetString() : null,
+                    cmd.TryGetProperty("profile", out var fpr) ? fpr.GetString() : null);
+
+            case "flysts_state":
+                return sim.FlystsGetState();
+
+            case "flysts_action":
+            {
+                var faction = cmd.TryGetProperty("action", out var fa) ? fa.GetString() ?? "" : "";
+                var fargs = new Dictionary<string, object?>();
+                if (cmd.TryGetProperty("args", out var fargsElem) && fargsElem.ValueKind == JsonValueKind.Object)
+                    foreach (var prop in fargsElem.EnumerateObject())
+                        fargs[prop.Name] = prop.Value.ValueKind switch
+                        {
+                            JsonValueKind.Number => prop.Value.GetInt32(),
+                            JsonValueKind.String => prop.Value.GetString(),
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => prop.Value.ToString(),
+                        };
+                return sim.FlystsAction(faction, fargs);
+            }
+
             case "start_run":
                 return sim.StartRun(
                     cmd.TryGetProperty("character", out var ch) ? ch.GetString() ?? "Ironclad" : "Ironclad",
                     cmd.TryGetProperty("ascension", out var asc) ? asc.GetInt32() : 0,
                     cmd.TryGetProperty("seed", out var s) ? s.GetString() : null,
-                    cmd.TryGetProperty("lang", out var lang) ? lang.GetString() ?? "en" : "en"
+                    cmd.TryGetProperty("flow", out var flow) ? flow.GetString() : null,
+                    cmd.TryGetProperty("act1", out var act1) ? act1.GetString() : null
                 );
 
             case "action":
@@ -155,11 +231,14 @@ class Program
                 }
                 if (saveJson == null)
                     return new Dictionary<string, object?> { ["type"] = "error", ["message"] = "Provide 'path' or 'json' for load_save" };
-                var loadLang = cmd.TryGetProperty("lang", out var le) ? (le.GetString() ?? "en") : "en";
-                return sim.LoadSave(saveJson, loadLang);
+                var loadFlow = cmd.TryGetProperty("flow", out var lf) ? lf.GetString() : null;
+                return sim.LoadSave(saveJson, loadFlow);
             }
             case "get_map":
                 return sim.GetFullMap();
+
+            case "get_state":
+                return sim.GetState();
 
             case "set_player":
             {
@@ -232,7 +311,7 @@ class Program
 
     static void WriteLine(Dictionary<string, object?> data)
     {
-        Console.Out.WriteLine(JsonSerializer.Serialize(data, JsonOpts));
-        Console.Out.Flush();
+        Protocol.WriteLine(JsonSerializer.Serialize(data, JsonOpts));
+        Protocol.Flush();
     }
 }

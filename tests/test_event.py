@@ -1,5 +1,4 @@
 """Tests for events."""
-import pytest
 
 
 class TestNeowEvent:
