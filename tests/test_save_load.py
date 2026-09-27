@@ -1,5 +1,7 @@
 """Regression tests for native save/load behavior."""
 
+import json
+
 import pytest
 
 from conftest import Game
@@ -189,5 +191,88 @@ def test_unknown_node_save_resumes_rolled_room(tmp_path):
     try:
         state = game.send({"cmd": "load_save", "path": save_path, "flow": "manual"})
         assert (state["decision"], state["context"]["room_type"], state["context"]["floor"]) == room
+    finally:
+        game.close()
+
+
+@pytest.mark.engine
+def test_rejected_load_keeps_the_room_checkpoint(tmp_path):
+    """A load_save refused before parsing (here: a newer schema) leaves the current run as it
+    was, including the room-entry checkpoint that write_continue_save uses inside a room."""
+    save_path = tmp_path / "combat.save"
+    game = Game()
+    try:
+        state = _enter_first_combat(game, "sl4")
+        enemies = _enemy_summary(state)
+        good = tmp_path / "good.save"
+        assert game.send({"cmd": "write_continue_save", "path": str(good)})["success"] is True
+        bad = json.loads(good.read_text())
+        bad["schema_version"] = 99999
+        r = game.send({"cmd": "load_save", "json": json.dumps(bad)})
+        assert r["type"] == "error" and "newer than this game build" in r["message"], r
+        assert game.send({"cmd": "get_state"})["decision"] == "combat_play"
+        assert game.send({"cmd": "write_continue_save", "path": str(save_path)})["success"] is True
+    finally:
+        game.close()
+    game = Game()
+    try:
+        state = game.send({"cmd": "load_save", "path": str(save_path)})
+        assert state["decision"] == "combat_play", state
+        assert _enemy_summary(state) == enemies
+    finally:
+        game.close()
+
+
+@pytest.mark.engine
+def test_save_schema_versions_follow_the_game(tmp_path):
+    """Like MigrationManager.LoadSave: newer and below-minimum saves are refused, an older
+    supported one is migrated (v15 -> v16 renames CARD.PREPARE to CARD.PREPARED)."""
+    game = Game()
+    try:
+        state = game.skip_neow(game.start(seed="schema1"))
+        game.set_player(deck=["PREPARED", "STRIKE_IRONCLAD"])
+        path = tmp_path / "map.save"
+        assert game.send({"cmd": "write_continue_save", "path": str(path)})["success"] is True
+        save = json.loads(path.read_text())
+        latest = save["schema_version"]
+        assert latest == 16, "the v15 -> v16 migration below assumes the v0.107.1 schema"
+        for version, expect in ((latest + 1, "newer than this game build"), (1, "below the minimum supported")):
+            r = game.send({"cmd": "load_save", "json": json.dumps({**save, "schema_version": version})})
+            assert r["type"] == "error" and expect in r["message"], r
+        text = path.read_text()
+        assert '"CARD.PREPARED"' in text
+        old = json.loads(text.replace('"CARD.PREPARED"', '"CARD.PREPARE"'))
+        old["schema_version"] = 15
+        state = game.send({"cmd": "load_save", "json": json.dumps(old)})
+        assert state["type"] == "decision", state
+        deck = [c["id"] for c in game.send({"cmd": "get_state"})["player"]["deck"]]
+        assert sorted(deck) == ["CARD.PREPARED", "CARD.STRIKE_IRONCLAD"], deck
+    finally:
+        game.close()
+
+
+@pytest.mark.engine
+def test_map_save_round_trips_the_player(tmp_path):
+    """write_continue_save then load_save gives back the same deck, relics, potions, gold, hp."""
+    def player_summary(state):
+        p = state["player"]
+        return (sorted((c["id"], c.get("upgraded")) for c in p["deck"]), [r["id"] for r in p["relics"]],
+                [x and x.get("id") for x in p.get("potions") or []], p["gold"], p["hp"], p["max_hp"])
+
+    path = tmp_path / "map.save"
+    game = Game()
+    try:
+        state = game.skip_neow(game.start(seed="roundtrip1"))
+        game.set_player(hp=41, max_hp=77, gold=123, relics=["VAJRA", "ANCHOR"],
+                        potions=["FIRE_POTION"], deck=["BASH", "STRIKE_IRONCLAD", "DEFEND_IRONCLAD"])
+        before = player_summary(game.send({"cmd": "get_state"}))
+        assert game.send({"cmd": "write_continue_save", "path": str(path)})["success"] is True
+    finally:
+        game.close()
+    game = Game()
+    try:
+        state = game.send({"cmd": "load_save", "path": str(path)})
+        assert state["decision"] == "map_select", state
+        assert player_summary(state) == before
     finally:
         game.close()

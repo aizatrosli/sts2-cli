@@ -53,9 +53,12 @@ public partial class RunSimulator
         _lastDecision = null;
     }
 
-    /// <summary>Returns null when the action is legal, otherwise an error response.</summary>
-    private Dictionary<string, object?>? ValidateAction(string action, Dictionary<string, object?>? args)
+    /// <summary>Returns null when the action is legal, otherwise an error response.
+    /// <paramref name="dispatchName"/> is the name to dispatch on: the listed action an alias
+    /// (proceed / leave_room) was validated as.</summary>
+    private Dictionary<string, object?>? ValidateAction(string action, Dictionary<string, object?>? args, out string dispatchName)
     {
+        dispatchName = action;
         // Recompute when nothing was exported since the last state change (e.g. after a debug
         // command), or when the export offered nothing: the engine may have caught up since
         // (a combat decision exported just before the play phase started).
@@ -69,6 +72,7 @@ public partial class RunSimulator
 
         var legal = _lastLegal!;
         var name = NormalizeActionName(action, legal);
+        dispatchName = name;
         var candidates = legal.Where(a => string.Equals(a["action"] as string, name, StringComparison.Ordinal)).ToList();
         if (candidates.Count == 0)
             return Illegal(action, $"'{action}' is not available at {_lastDecision}");

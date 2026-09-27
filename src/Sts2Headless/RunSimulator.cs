@@ -113,7 +113,7 @@ internal class LocLookup
                 var data = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(file));
                 if (data != null) target[name] = data;
             }
-            catch { }
+            catch (Exception ex) { PatchReport.Warn($"Localization table {Path.GetFileName(file)} not loaded: {ex.Message}"); }
         }
     }
 
@@ -177,7 +177,6 @@ public partial class RunSimulator
     private readonly ManualResetEventSlim _combatEnded = new(false);
     private static readonly LocLookup _loc = new();
     private bool _eventOptionChosen;
-    private int _lastEventOptionCount;
     // Auto flow: the thread-pool task running the last chosen event option (see WaitForEventOption).
     private Task? _eventOptionTask;
     private Task? _restOptionTask;
@@ -234,8 +233,10 @@ public partial class RunSimulator
             // A new run in the same process (e.g. an RL env reset) must tear down the previous
             // one first; RunManager.SetUpTest refuses to run twice ("State is already set").
             if (_runState != null) CleanUp();
+            RestoreDefaultProgress();
             ResetRunScopedState();
             ResetManualFlowState();
+            SurfaceUnobservedTaskFailures();
             _manualFlow = manual;
 
             var player = CreatePlayer(character)!;
@@ -378,12 +379,23 @@ public partial class RunSimulator
                 }
             }
 
-            if (args.TryGetValue("hp", out var hpEl) && player.Creature != null)
-                SetField(player.Creature, "_currentHp", hpEl.GetInt32());
-            if (args.TryGetValue("max_hp", out var mhpEl) && player.Creature != null)
-                SetField(player.Creature, "_maxHp", mhpEl.GetInt32());
-            if (args.TryGetValue("gold", out var goldEl))
-                player.Gold = goldEl.GetInt32();
+            // Scalars too: a bad value must not leave hp already changed.
+            int? hp = null, maxHp = null, gold = null;
+            foreach (var (key, set) in new (string, Action<int>)[]
+                     { ("hp", v => hp = v), ("max_hp", v => maxHp = v), ("gold", v => gold = v) })
+            {
+                if (!args.TryGetValue(key, out var el)) continue;
+                if (el.ValueKind != System.Text.Json.JsonValueKind.Number || !el.TryGetInt32(out var v))
+                    return Error($"set_player: '{key}' must be an integer");
+                set(v);
+            }
+
+            if (hp != null && player.Creature != null)
+                SetField(player.Creature, "_currentHp", hp.Value);
+            if (maxHp != null && player.Creature != null)
+                SetField(player.Creature, "_maxHp", maxHp.Value);
+            if (gold != null)
+                player.Gold = gold.Value;
 
             if (wantedRelics != null)
             {
@@ -448,11 +460,17 @@ public partial class RunSimulator
         catch (Exception ex) { return ErrorWithTrace("SetPlayer failed", ex); }
     }
 
+    /// <summary>A debug command that moves the run (or can open its own screen) while a selection is
+    /// open would leave that selection's screen in front of the new room; resolve it first.</summary>
+    private Dictionary<string, object?> PendingSelectionRefusal(string command) =>
+        Error($"{command}: a selection is pending; resolve it first");
+
     public Dictionary<string, object?> EnterRoom(string roomType, string? encounter, string? eventId)
     {
         try
         {
             if (_runState == null) return Error("No run in progress");
+            if (HasPendingSelection) return PendingSelectionRefusal("enter_room");
             var runState = _runState;
             Log($"EnterRoom: type={roomType} encounter={encounter} event={eventId}");
 
@@ -512,6 +530,7 @@ public partial class RunSimulator
         try
         {
             if (_runState == null) return Error("No run in progress");
+            if (HasPendingSelection) return PendingSelectionRefusal("enter_ancient");
             if (string.IsNullOrEmpty(eventId)) return Error("enter_ancient requires 'event' (e.g. DARV)");
             if (ModelDb.GetByIdOrNull<EventModel>(new ModelId("EVENT", eventId.ToUpperInvariant())) is not AncientEventModel ancient)
                 return Error($"Unknown ancient: {eventId}");
@@ -538,6 +557,7 @@ public partial class RunSimulator
         try
         {
             if (_runState == null) return Error("No run in progress");
+            if (HasPendingSelection) return PendingSelectionRefusal("obtain_relic");
             if (string.IsNullOrEmpty(relicId)) return Error("obtain_relic requires 'relic'");
             var relic = ModelDb.GetByIdOrNull<RelicModel>(new ModelId("RELIC", relicId.ToUpperInvariant()));
             if (relic == null) return Error($"Unknown relic: {relicId}");
@@ -631,10 +651,10 @@ public partial class RunSimulator
 
             Log("Loading save file...");
 
-            _roomEntrySaveJson = null;
+            // _roomEntrySaveJson is cleared by ResetRunScopedState once the save has parsed.
             saveJson = ExtractResumeMapCoord(saveJson, out var resumeCoord);
 
-            if (!ValidateSaveSchemaVersion(saveJson, out var schemaError))
+            if (!ValidateSaveSchemaVersion(ref saveJson, out var schemaError))
                 return Error($"Save schema mismatch: {schemaError}");
 
             var readResult = SaveManager.FromJson<SerializableRun>(saveJson);
@@ -642,8 +662,10 @@ public partial class RunSimulator
                 return Error($"Failed to parse save file: {readResult.Status} {readResult.ErrorMessage}");
 
             if (_runState != null) CleanUp();
+            RestoreDefaultProgress();
             ResetRunScopedState();
             ResetManualFlowState();
+            SurfaceUnobservedTaskFailures();
             _manualFlow = manual;
 
             var save = readResult.SaveData;
@@ -764,103 +786,91 @@ public partial class RunSimulator
         return null;
     }
 
-    /// <summary>Find static parameterless GetLatestSchemaVersion (or close) on sts2; supports int/uint/long.</summary>
+    /// <summary>The game's latest SerializableRun schema (SaveManager.GetLatestSchemaVersion, i.e. the
+    /// MigrationManager's registered migrations).</summary>
     private static int? TryReflectLatestSaveSchemaVersion()
     {
-        var asm = typeof(SerializableRun).Assembly;
-        Type[] types;
-        try
+        try { return SaveManager.Instance.GetLatestSchemaVersion<SerializableRun>(); }
+        catch (Exception ex)
         {
-            types = asm.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            types = ex.Types.Where(t => t != null).Cast<Type>().ToArray();
-        }
-
-        var candidates = new List<(int score, string typeName, int value)>();
-        foreach (var t in types)
-        {
-            MethodInfo? m;
-            try
-            {
-                foreach (var name in new[] { "GetLatestSchemaVersion", "GetLatestVersion" })
-                {
-                    m = t.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                        null, Type.EmptyTypes, null);
-                    if (m == null) continue;
-                    var tn = t.FullName ?? "";
-                    // Avoid unrelated static GetLatestVersion() elsewhere in the assembly.
-                    if (name == "GetLatestVersion" && !tn.Contains("Saves", StringComparison.Ordinal))
-                        continue;
-
-                    var conv = TryConvertSchemaNumber(m.Invoke(null, null));
-                    if (!conv.HasValue) continue;
-
-                    var score = name == "GetLatestSchemaVersion" ? 100 : 0;
-                    if (tn.Contains("Saves", StringComparison.Ordinal)) score += 50;
-                    if (tn.Contains("Schema", StringComparison.Ordinal) || tn.Contains("Migration", StringComparison.Ordinal))
-                        score += 25;
-                    candidates.Add((score, tn, conv.Value));
-                }
-            }
-            catch
-            {
-                // type may not support full reflection on this runtime
-            }
-        }
-
-        if (candidates.Count == 0)
+            Console.Error.WriteLine($"[Sts2Headless] GetLatestSchemaVersion<SerializableRun> failed: {ex.Message}");
             return null;
-
-        var best = candidates.OrderByDescending(c => c.score).ThenBy(c => c.typeName).First();
-        return best.value;
+        }
     }
 
-    private static int? TryConvertSchemaNumber(object? value) => value switch
-    {
-        int i => i,
-        uint u => u <= int.MaxValue ? (int)u : null,
-        long l => l >= int.MinValue && l <= int.MaxValue ? (int)l : null,
-        short s => s,
-        ushort us => us,
-        byte b => b,
-        _ => null,
-    };
-
-    private static bool ValidateSaveSchemaVersion(string saveJson, out string error)
+    /// <summary>
+    /// Schema check like MigrationManager.LoadSave: a save from a newer schema is refused (the game
+    /// would scavenge it with data loss; an engine client should not silently get a different run),
+    /// one below the minimum supported version is refused, and an older supported one is migrated
+    /// with the game's own migrations (MigrateDataSequentially) before parsing.
+    /// </summary>
+    private static bool ValidateSaveSchemaVersion(ref string saveJson, out string error)
     {
         error = "";
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(saveJson);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("schema_version", out var versionElem))
+            int schemaVersion;
+            using (var doc = System.Text.Json.JsonDocument.Parse(saveJson))
             {
-                error = "missing schema_version";
-                return false;
-            }
-
-            if (versionElem.ValueKind != System.Text.Json.JsonValueKind.Number ||
-                !versionElem.TryGetInt32(out var schemaVersion))
-            {
-                error = "schema_version is not a valid integer";
-                return false;
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("schema_version", out var versionElem))
+                {
+                    error = "missing schema_version";
+                    return false;
+                }
+                if (versionElem.ValueKind != System.Text.Json.JsonValueKind.Number ||
+                    !versionElem.TryGetInt32(out schemaVersion))
+                {
+                    error = "schema_version is not a valid integer";
+                    return false;
+                }
             }
 
             var expected = GetExpectedSaveSchemaVersion();
-            if (expected.HasValue && schemaVersion != expected.Value)
+            if (!expected.HasValue || schemaVersion == expected.Value) return true;
+            if (schemaVersion > expected.Value)
             {
-                error = $"expected v{expected.Value}, got v{schemaVersion}";
+                error = $"save is v{schemaVersion}, newer than this game build's v{expected.Value}";
                 return false;
             }
-
-            return true;
+            return TryMigrateRunSave(ref saveJson, schemaVersion, expected.Value, out error);
         }
         catch (Exception ex)
         {
             error = $"could not inspect save: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryMigrateRunSave(ref string saveJson, int from, int latest, out string error)
+    {
+        error = "";
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var manager = typeof(SaveManager).GetField("_migrationManager", flags)?.GetValue(SaveManager.Instance);
+        var minimum = manager?.GetType().GetMethod("GetMinimumSupportedVersion", flags)?.MakeGenericMethod(typeof(SerializableRun));
+        var migrate = manager?.GetType().GetMethod("MigrateDataSequentially", flags)?.MakeGenericMethod(typeof(SerializableRun));
+        if (minimum == null || migrate == null)
+        {
+            error = $"save is v{from}, older than v{latest}, and the game's migration path was not found";
+            return false;
+        }
+        try
+        {
+            int min = (int)minimum.Invoke(manager, null)!;
+            if (from < min)
+            {
+                error = $"save is v{from}, below the minimum supported v{min}";
+                return false;
+            }
+            var data = (MegaCrit.Sts2.Core.Saves.Migrations.MigratingData)migrate.Invoke(manager,
+                new object[] { new MegaCrit.Sts2.Core.Saves.Migrations.MigratingData(saveJson) })!;
+            saveJson = data.GetRawNode().ToJsonString();
+            Log($"Save migrated from v{from} to v{latest}");
+            return true;
+        }
+        catch (TargetInvocationException ex)
+        {
+            error = $"migrating the save from v{from} failed: {ex.InnerException?.Message ?? ex.Message}";
             return false;
         }
     }
@@ -1096,7 +1106,7 @@ public partial class RunSimulator
             if (_runState == null)
                 return Error("No run in progress");
 
-            var illegal = ValidateAction(action, args);
+            var illegal = ValidateAction(action, args, out action);
             if (illegal != null) return illegal;
             // The action will change state; its response re-exports the legal set.
             InvalidateLegal();
@@ -1188,7 +1198,6 @@ public partial class RunSimulator
         _rewardsProcessed = false;
         _pendingCardReward = null;
         _eventOptionChosen = false;
-        _lastEventOptionCount = 0;
         _pendingRewards = null;
         _lastKnownHp = player.Creature?.CurrentHp ?? 0;
         ResetRoomFlowState();
@@ -1321,9 +1330,7 @@ public partial class RunSimulator
                 if (!CombatManager.Instance.IsInProgress || player.Creature.IsDead)
                     return DetectDecisionPoint();
                 // Brief wait for ThreadPool if sync context didn't catch it
-                Thread.Sleep(100);
-                _syncCtx.Pump();
-                if (!IsPlayPhase())
+                if (!PollUntil(IsPlayPhase, 100))
                     return DetectDecisionPoint();
             }
         }
@@ -1381,15 +1388,15 @@ public partial class RunSimulator
 
         // Second fallback: if still stuck after SuppressYield window, cancel and retry.
         // The WaitUntilQueue TCS is likely deadlocked.
-        if (CombatManager.Instance.IsInProgress && !IsPlayPhase() && !player.Creature.IsDead)
+        // NextTurnReached, not IsPlayPhase: right after EndTurn the phase can still read Play for
+        // the old turn, which would export a stale combat_play here.
+        if (!NextTurnReached())
         {
             Log("EndTurn stuck, cancelling and retrying with SuppressYield...");
             try
             {
                 RunManager.Instance.ActionExecutor.Cancel();
-                _syncCtx.Pump();
-                Thread.Sleep(50);
-                _syncCtx.Pump();
+                PollUntil(EngineIdle, 50);
 
                 // Reset the player ready state and try again with SuppressYield
                 CombatManager.Instance.UndoReadyToEndTurn(player);
@@ -1416,7 +1423,7 @@ public partial class RunSimulator
                     PollPause(i);
                 }
             }
-            catch (Exception ex) { Log($"Cancel retry: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"Cancel retry: {ex.Message}"); }
 
             // NUCLEAR OPTION: If STILL stuck after 2 attempts, use ThreadPool to force
             // the enemy turn processing to complete with SuppressYield permanently on.
@@ -1436,8 +1443,7 @@ public partial class RunSimulator
                     RunManager.Instance.ActionExecutor.Cancel();
                     _syncCtx.Pump();
                     CombatManager.Instance.UndoReadyToEndTurn(player);
-                    _syncCtx.Pump();
-                    Thread.Sleep(50);
+                    PollUntil(EngineIdle, 50);
 
                     // Run EndTurn on ThreadPool with SuppressYield permanently on
                     YieldPatches.SuppressYield = true;
@@ -1446,29 +1452,14 @@ public partial class RunSimulator
                         PlayerCmd.EndTurn(player, canBackOut: false);
                     });
 
-                    // Aggressively pump sync context while waiting (up to 5 seconds)
-                    for (int i = 0; i < 500; i++)
-                    {
-                        _syncCtx.Pump();
-                        if (endTurnTask.IsCompleted) break;
-                        if (_turnStarted.IsSet || _combatEnded.IsSet) break;
-                        if (!CombatManager.Instance.IsInProgress || player.Creature.IsDead) break;
-                        if (IsPlayPhase()) break;
-                        Thread.Sleep(10);
-                    }
+                    // Pump while waiting (up to 5 seconds of wall clock)
+                    PollUntil(() => endTurnTask.IsCompleted || _turnStarted.IsSet || _combatEnded.IsSet
+                        || !CombatManager.Instance.IsInProgress || player.Creature.IsDead || IsPlayPhase(), 5000);
                     YieldPatches.SuppressYield = false;
 
                     // If still not play phase, try just waiting a bit more
                     if (CombatManager.Instance.IsInProgress && !IsPlayPhase() && !player.Creature.IsDead)
-                    {
-                        for (int i = 0; i < 200; i++)
-                        {
-                            _syncCtx.Pump();
-                            Thread.Sleep(10);
-                            if (IsPlayPhase() || !CombatManager.Instance.IsInProgress || player.Creature.IsDead)
-                                break;
-                        }
-                    }
+                        PollUntil(() => IsPlayPhase() || !CombatManager.Instance.IsInProgress || player.Creature.IsDead, 2000);
 
                     if (IsPlayPhase())
                         Log("Nuclear fallback SUCCEEDED — play phase resumed");
@@ -1514,6 +1505,7 @@ public partial class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
             WaitForEventOption();
+            if (_runState?.CurrentRoom is RestSiteRoom) return FinishRestOptionToMap();
             return DetectDecisionPoint();
         }
 
@@ -1539,7 +1531,7 @@ public partial class RunSimulator
             _syncCtx.Pump();
             RunManager.Instance.RewardSynchronizer.SyncLocalObtainedCard(card);
         }
-        catch (Exception ex) { Log($"Add card to deck: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.EngineWarning($"Add card to deck: {ex.Message}"); }
 
         _pendingCardReward = null;
         // Check if more rewards pending
@@ -1557,6 +1549,7 @@ public partial class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
             WaitForEventOption();
+            if (_runState?.CurrentRoom is RestSiteRoom) return FinishRestOptionToMap();
             return DetectDecisionPoint();
         }
         if (_pendingCardReward != null)
@@ -1780,12 +1773,8 @@ public partial class RunSimulator
         if (_runState?.CurrentRoom is RestSiteRoom)
         {
             // Let the rest option finish (the Smith upgrade runs after the selection resolves).
-            PollUntil(() => _restOptionTask == null || _restOptionTask.IsCompleted || HasPendingSelection, 2000);
-            WaitForActionExecutor();
-            // Force to map after SMITH completes (same pattern as HEAL)
             Log("Card selection in rest site (SMITH), forcing to map");
-            ForceToMap();
-            return MapSelectState();
+            return FinishRestOptionToMap();
         }
 
         // Extra wait for shop card removal: the purchase task needs to finish
@@ -1831,14 +1820,8 @@ public partial class RunSimulator
         try
         {
             resolve();
-            for (int i = 0; i < 400; i++)
-            {
-                _syncCtx.Pump();
-                if (HasPendingSelection) break;
-                if (!CombatManager.Instance.IsInProgress || player?.Creature?.IsDead == true) break;
-                if (IsPlayPhase()) break;
-                Thread.Sleep(5);
-            }
+            PollUntil(() => HasPendingSelection || !CombatManager.Instance.IsInProgress
+                || player?.Creature?.IsDead == true || IsPlayPhase(), 2000);
         }
         finally { YieldPatches.SuppressYield = false; }
     }
@@ -1854,8 +1837,9 @@ public partial class RunSimulator
         if (!CombatManager.Instance.IsInProgress) return;
         var executor = RunManager.Instance.ActionExecutor;
         var queues = RunManager.Instance.ActionQueueSet;
-        int quiet = 0;
-        for (int i = 0; i < 1000; i++)
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long quietSince = -1;
+        for (int i = 0; sw.ElapsedMilliseconds < 2000; i++)
         {
             _syncCtx.Pump();
             if (HasPendingSelection || !CombatManager.Instance.IsInProgress) return;
@@ -1868,10 +1852,11 @@ public partial class RunSimulator
                 _syncCtx.Pump();
                 if (!executor.IsRunning && queues.IsEmpty && _syncCtx.IsIdle) return;
             }
-            // Executor idle but actions still queued (e.g. waiting on a pause): old quiet period.
-            quiet = executor.IsRunning ? 0 : quiet + 1;
-            if (quiet >= 8) return;
-            Thread.Sleep(2);
+            // Executor idle but actions still queued (e.g. waiting on a pause): a 16 ms quiet period.
+            if (executor.IsRunning) quietSince = -1;
+            else if (quietSince < 0) quietSince = sw.ElapsedMilliseconds;
+            else if (sw.ElapsedMilliseconds - quietSince >= 16) return;
+            PollPause(i);
         }
     }
 
@@ -1890,6 +1875,11 @@ public partial class RunSimulator
         // Like select_cards: an event option (e.g. Neow's Hefty Tablet) keeps running after the
         // selection; without this the next observation was the stale pre-choice event page.
         WaitForEventOption();
+        // A cancelled Smith returns to the rest site: let its option task finish now. Left
+        // pending, it resumed after the next option had cleared the list and threw inside
+        // RestSiteSynchronizer.ChooseOption (its log line re-reads options[index]).
+        if (_runState?.CurrentRoom is RestSiteRoom)
+            PollUntil(() => _restOptionTask == null || _restOptionTask.IsCompleted || HasPendingSelection, 2000);
         return DetectDecisionPoint();
     }
 
@@ -1995,6 +1985,17 @@ public partial class RunSimulator
         return DetectDecisionPoint();
     }
 
+    /// <summary>Auto flow: let the chosen rest option finish, then leave for the map. A selection it
+    /// opens on the way (a second prompt) is exported instead.</summary>
+    private Dictionary<string, object?> FinishRestOptionToMap()
+    {
+        PollUntil(() => _restOptionTask == null || _restOptionTask.IsCompleted || HasPendingSelection, 2000);
+        if (HasPendingSelection) return DetectDecisionPoint();
+        WaitForActionExecutor();
+        ForceToMap();
+        return MapSelectState();
+    }
+
     private Dictionary<string, object?> DoChooseOption(Player player, Dictionary<string, object?>? args)
     {
         if (args == null || !args.ContainsKey("option_index"))
@@ -2013,39 +2014,26 @@ public partial class RunSimulator
                 // Run on background thread so Smith card selection can pause
                 var task = Task.Run(() => RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(optionIndex));
                 _restOptionTask = task;
-                var poll = System.Diagnostics.Stopwatch.StartNew();
-                for (int i = 0; poll.ElapsedMilliseconds < 1000; i++)
-                {
-                    _syncCtx.Pump();
-                    if (_cardSelector.HasPending) break;
-                    if (task.IsCompleted) break;
-                    PollPause(i);
-                }
-                if (_cardSelector.HasPending)
+                // Any selection the option opens (Smith's card select, a card reward from Dream
+                // Catcher's heal, a bundle) is the next decision; the task finishes once it resolves.
+                PollUntil(() => HasPendingSelection || task.IsCompleted, 3000);
+                if (HasPendingSelection)
                 {
                     WaitForActionExecutor();
                     return DetectDecisionPoint();
                 }
-                if (!task.IsCompleted) task.Wait(2000);
-                _syncCtx.Pump();
             }
             catch (Exception ex)
             {
                 Log($"Rest site ChooseLocalOption failed: {ex.Message}");
             }
 
-            // After non-Smith rest site options (HEAL, etc.), the options may not clear.
-            // Wait for the action to complete (heal/dig), then force transition to map.
-            if (!_cardSelector.HasPending)
-            {
-                Log("Rest site: option chosen (non-Smith), waiting for action then forcing to map");
-                // Give the action time to complete (heal HP, dig for relic, etc.)
-                WaitForActionExecutor();
-                PollUntil(EngineIdle, 200);
-                WaitForActionExecutor();
-                ForceToMap();
-                return MapSelectState();
-            }
+            // After rest site options (HEAL, etc.) the options may not clear: wait for the action
+            // to complete (heal/dig), then force transition to map.
+            Log("Rest site: option chosen, waiting for action then forcing to map");
+            WaitForActionExecutor();
+            PollUntil(EngineIdle, 200);
+            return FinishRestOptionToMap();
         }
         // For events — use EventSynchronizer
         // Run Chosen() on a background thread so card selections can pause
@@ -2062,7 +2050,6 @@ public partial class RunSimulator
                     try
                     {
                         _eventOptionChosen = true;
-                        _lastEventOptionCount = options.Count;
                         // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block.
                         // Read the option here: the live list can change before the pool thread runs.
                         var option = options[optionIndex];
@@ -2088,7 +2075,7 @@ public partial class RunSimulator
                         if (!task.IsCompleted) task.Wait(2000);
                         _syncCtx.Pump();
                     }
-                    catch (Exception ex) { Log($"Event choose: {ex.Message}"); }
+                    catch (Exception ex) { PatchReport.EngineWarning($"Event choose: {ex.Message}"); }
                 }
 
                 // Note: do NOT force-finish on `optCountAfter == optCountBefore`. Events can
@@ -2106,7 +2093,7 @@ public partial class RunSimulator
     {
         Log("Leaving room");
         try { RunManager.Instance.ProceedFromTerminalRewardsScreen().GetAwaiter().GetResult(); }
-        catch { }
+        catch (Exception ex) { PatchReport.EngineWarning($"Leave room: {ex.Message}"); }
         _syncCtx.Pump();
         WaitForActionExecutor();
 
@@ -2121,7 +2108,7 @@ public partial class RunSimulator
                 _syncCtx.Pump();
                 WaitForActionExecutor();
             }
-            catch (Exception ex) { Log($"Force leave: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"Force leave: {ex.Message}"); }
         }
         return DetectDecisionPoint();
     }
@@ -2309,14 +2296,9 @@ public partial class RunSimulator
             }
             // Fallback: wait (up to ~2s) for the play phase; combats started from an event option
             // run their turn loop off the main thread.
-            for (int i = 0; i < 1000; i++)
-            {
-                _syncCtx.Pump();
-                if (HasPendingSelection) return DetectDecisionPoint();
-                Thread.Sleep(2);
-                if (IsPlayPhase()) return CombatPlayState(player);
-                if (!CombatManager.Instance.IsInProgress) return DetectPostCombatState(player, combatRoom);
-            }
+            PollUntil(() => HasPendingSelection || IsPlayPhase() || !CombatManager.Instance.IsInProgress, 2000);
+            if (HasPendingSelection) return DetectDecisionPoint();
+            if (!IsPlayPhase() && !CombatManager.Instance.IsInProgress) return DetectPostCombatState(player, combatRoom);
             return CombatPlayState(player);
         }
 
@@ -2456,12 +2438,12 @@ public partial class RunSimulator
                 {
                     stats[dv.Name.ToLowerInvariant()] = (int)dv.PreviewValue;
                 }
-                // Restore the live card to base state. UpdateDynamicVarPreview mutates the
-                // card's preview (and for self-cost cards like Momentum Strike, leaving it in
-                // preview state corrupts the subsequent PlayCardAction — card stays in hand).
-                c.DynamicVars.ClearPreview();
             }
             catch { }
+            // Restore the live card to base state, also when the preview threw. UpdateDynamicVarPreview
+            // mutates the card's preview (and for self-cost cards like Momentum Strike, leaving it in
+            // preview state corrupts the subsequent PlayCardAction — card stays in hand).
+            finally { c.DynamicVars.ClearPreview(); }
 
             // Per-target resolved damage for attack cards: the scalar `stats` above use the
             // card's CurrentTarget, but a single value can't capture target-specific modifiers
@@ -2738,7 +2720,7 @@ public partial class RunSimulator
                         || reward is MegaCrit.Sts2.Core.Rewards.PotionReward)
                     {
                         try { reward.SelectUnsynchronized().GetAwaiter().GetResult(); _syncCtx.Pump(); }
-                        catch (Exception ex) { Log($"Auto-collect reward: {ex.Message}"); }
+                        catch (Exception ex) { PatchReport.EngineWarning($"Auto-collect reward: {ex.Message}"); }
                     }
                     else if (reward is CardReward cr)
                     {
@@ -2755,7 +2737,7 @@ public partial class RunSimulator
 
                 _pendingRewards = null;
             }
-            catch (Exception ex) { Log($"Generate rewards: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"Generate rewards: {ex.Message}"); }
         }
 
         // No more pending rewards — proceed
@@ -2787,7 +2769,7 @@ public partial class RunSimulator
                 _syncCtx.Pump();
                 WaitForActionExecutor();
             }
-            catch (Exception ex) { Log($"EnterNextAct: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"EnterNextAct: {ex.Message}"); }
             return DetectDecisionPoint();
         }
 
@@ -2827,12 +2809,12 @@ public partial class RunSimulator
             RunManager.Instance.ProceedFromTerminalRewardsScreen().GetAwaiter().GetResult();
             _syncCtx.Pump();
         }
-        catch { }
+        catch (Exception ex) { PatchReport.EngineWarning($"ForceToMap: {ex.Message}"); }
 
         if (_runState?.CurrentRoom is not MapRoom)
         {
             try { RunManager.Instance.EnterRoom(new MapRoom()).GetAwaiter().GetResult(); _syncCtx.Pump(); }
-            catch (Exception ex) { Log($"ForceToMap: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"ForceToMap: {ex.Message}"); }
         }
     }
 
@@ -2861,12 +2843,12 @@ public partial class RunSimulator
                 RunManager.Instance.ProceedFromTerminalRewardsScreen().GetAwaiter().GetResult();
                 _syncCtx.Pump();
             }
-            catch { }
+            catch (Exception ex) { PatchReport.EngineWarning($"Finished event: {ex.Message}"); }
             // Force to map if still in event room
             if (_runState?.CurrentRoom is EventRoom)
             {
                 try { RunManager.Instance.EnterRoom(new MapRoom()).GetAwaiter().GetResult(); _syncCtx.Pump(); }
-                catch { }
+                catch (Exception ex) { PatchReport.EngineWarning($"Finished event to map: {ex.Message}"); }
             }
             return _runState?.CurrentRoom is MapRoom ? MapSelectState() : DetectDecisionPoint();
         }
@@ -2876,7 +2858,7 @@ public partial class RunSimulator
         {
             Log($"Event {localEvent.GetType().Name} has no options, auto-skipping");
             try { RunManager.Instance.EnterRoom(new MapRoom()).GetAwaiter().GetResult(); _syncCtx.Pump(); }
-            catch { }
+            catch (Exception ex) { PatchReport.EngineWarning($"Optionless event to map: {ex.Message}"); }
             return MapSelectState();
         }
 
@@ -3176,7 +3158,7 @@ public partial class RunSimulator
                 }
             }
         }
-        catch (Exception ex) { Log($"Treasure relic pick: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.EngineWarning($"Treasure relic pick: {ex.Message}"); }
 
         try
         {
@@ -3200,7 +3182,7 @@ public partial class RunSimulator
             }
             catch (Exception retryEx) { Log($"Treasure rewards retry failed: {retryEx.Message}"); }
         }
-        catch (Exception ex) { Log($"Treasure rewards: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.EngineWarning($"Treasure rewards: {ex.Message}"); }
 
         ForceToMap();
         return MapSelectState();
@@ -3247,35 +3229,14 @@ public partial class RunSimulator
             var executor = RunManager.Instance.ActionExecutor;
             if (executor.IsRunning)
             {
-                // Pump while waiting for executor
-                int maxPumps = 1000;
-                for (int i = 0; i < maxPumps; i++)
-                {
-                    _syncCtx.Pump();
-                    if (!executor.IsRunning) break;
-                    // a hook action the executor is running can open a selection (flysts mode)
-                    if (_cardSelector.HasPending || _cardSelector.HasPendingReward) break;
-                    Thread.Sleep(1);
-                }
+                // Pump while waiting for executor; a hook action the executor is running can open
+                // a selection (flysts mode)
+                PollUntil(() => !executor.IsRunning || _cardSelector.HasPending || _cardSelector.HasPendingReward, 2000);
             }
         }
         catch (Exception ex)
         {
             Log($"WaitForActionExecutor exception: {ex.Message}");
-        }
-    }
-
-    private void SpinWaitForCombatStable()
-    {
-        int maxIterations = 200;
-        for (int i = 0; i < maxIterations; i++)
-        {
-            _syncCtx.Pump();
-            if (!CombatManager.Instance.IsInProgress) return;
-            if (IsPlayPhase()) return;
-            WaitForActionExecutor();
-            if (IsPlayPhase() || !CombatManager.Instance.IsInProgress) return;
-            Thread.Sleep(5);
         }
     }
 
@@ -3572,12 +3533,15 @@ public partial class RunSimulator
                         harmony.Patch(waitMethod, new HarmonyMethod(prefix));
                         Console.Error.WriteLine("[INFO] Patched Cmd.Wait() to no-op (prevents boss fight deadlocks)");
                     }
+                    else PatchReport.Warn("Cmd.Wait: prefix CmdWaitPrefix not found");
                 }
                 else
                 {
                     // Try to find any Wait method
                     var methods = cmdType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
                         .Where(m => m.Name == "Wait").ToList();
+                    // v0.107.1: Wait(float, bool) and Wait(float, CancellationToken, bool)
+                    PatchReport.Expect("Cmd.Wait overloads", methods.Count, 2);
                     foreach (var m in methods)
                     {
                         Console.Error.WriteLine($"[INFO] Found Cmd.Wait({string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))})");
@@ -3593,7 +3557,7 @@ public partial class RunSimulator
             }
             else
             {
-                Console.Error.WriteLine("[WARN] Could not find MegaCrit.Sts2.Core.Commands.Cmd type");
+                PatchReport.Warn("Cmd.Wait: could not find MegaCrit.Sts2.Core.Commands.Cmd");
             }
         }
         catch (Exception ex)
@@ -3622,6 +3586,7 @@ public partial class RunSimulator
                 harmony.Patch(playMethod, new HarmonyMethod(prefix));
                 Console.Error.WriteLine("[INFO] Patched TalkCmd.Play() to no-op (prevents enemy-move VFX crash, issue #64)");
             }
+            else PatchReport.Warn("TalkCmd.Play: prefix TalkCmdPlayPrefix not found");
         }
         catch (Exception ex)
         {
@@ -3660,6 +3625,7 @@ public partial class RunSimulator
             // This makes `await Task.Yield()` execute synchronously (continuation runs inline)
             var yieldAwaiterType = typeof(System.Runtime.CompilerServices.YieldAwaitable)
                 .GetNestedType("YieldAwaiter");
+            bool patched = false;
             if (yieldAwaiterType != null)
             {
                 var isCompletedProp = yieldAwaiterType.GetProperty("IsCompleted");
@@ -3672,9 +3638,11 @@ public partial class RunSimulator
                     {
                         harmony.Patch(getter, new HarmonyMethod(prefix));
                         Console.Error.WriteLine("[INFO] Patched Task.Yield() to be synchronous");
+                        patched = true;
                     }
                 }
             }
+            if (!patched) PatchReport.Warn("Task.Yield: YieldAwaiter.IsCompleted not found; not patched");
         }
         catch (Exception ex)
         {
@@ -3953,7 +3921,7 @@ public partial class RunSimulator
                         if (data != null)
                             tables[name] = new LocTable(name, data);
                     }
-                    catch { }
+                    catch (Exception ex) { PatchReport.Warn($"Localization table {Path.GetFileName(file)} not loaded: {ex.Message}"); }
                 }
                 Console.Error.WriteLine($"[INFO] Loaded {tables.Count} localization tables from {locDir}");
             }
@@ -4084,6 +4052,7 @@ public partial class RunSimulator
                 harmony.Patch(getRawText, new HarmonyMethod(prefix));
                 Console.Error.WriteLine("[INFO] Patched LocTable.GetRawText");
             }
+            else PatchReport.Warn("LocTable.GetRawText(string) not found; not patched");
 
             // Patch GetLocString to not throw
             var getLocString = typeof(LocTable).GetMethod("GetLocString");
@@ -4094,6 +4063,7 @@ public partial class RunSimulator
                 try { harmony.Patch(getLocString, new HarmonyMethod(glsPrefix)); }
                 catch (Exception ex4) { PatchReport.Warn($"Failed to patch GetLocString: {ex4.Message}"); }
             }
+            else PatchReport.Warn("LocTable.GetLocString not found; not patched");
 
             // Patch FromChooseABundleScreen to use our card selector
             try
@@ -4107,6 +4077,7 @@ public partial class RunSimulator
                     harmony.Patch(bundleMethod, new HarmonyMethod(bundlePrefix));
                     Console.Error.WriteLine("[INFO] Patched FromChooseABundleScreen");
                 }
+                else PatchReport.Warn("CardSelectCmd.FromChooseABundleScreen not found; not patched");
             }
             catch (Exception ex) { PatchReport.Warn($"Bundle patch: {ex.Message}"); }
 
@@ -4122,6 +4093,7 @@ public partial class RunSimulator
                     harmony.Patch(showScreen, new HarmonyMethod(csPrefix));
                     Console.Error.WriteLine("[INFO] Patched NCrystalSphereScreen.ShowScreen");
                 }
+                else PatchReport.Warn("NCrystalSphereScreen.ShowScreen not found; not patched");
             }
             catch (Exception ex) { PatchReport.Warn($"Crystal Sphere patch: {ex.Message}"); }
 
@@ -4131,29 +4103,8 @@ public partial class RunSimulator
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[WARN] InitLocManager failed: {ex.Message}");
+            PatchReport.Warn($"InitLocManager failed: {ex.Message}");
         }
-    }
-
-    private static void PatchMethod(Harmony harmony, Type type, string methodName, string patchName)
-    {
-        try
-        {
-            var method = type.GetMethod(methodName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            PatchMethod(harmony, method, patchName);
-        }
-        catch (Exception ex) { PatchReport.Warn($"Failed to patch {type.Name}.{methodName}: {ex.Message}"); }
-    }
-
-    private static void PatchMethod(Harmony harmony, System.Reflection.MethodInfo? method, string patchName)
-    {
-        if (method == null) return;
-        try
-        {
-            var prefix = typeof(LocPatches).GetMethod(patchName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-            if (prefix != null) harmony.Patch(method, new HarmonyMethod(prefix));
-        }
-        catch (Exception ex) { PatchReport.Warn($"Failed to patch {method.Name}: {ex.Message}"); }
     }
 
     internal static class LocPatches
@@ -4340,6 +4291,19 @@ public partial class RunSimulator
         CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
     }
 
+    /// <summary>
+    /// A torn-down run's faulted background task (an action still queued when the run was
+    /// abandoned) is reported by TaskScheduler.UnobservedTaskException only when the task is
+    /// garbage-collected, which used to land at an arbitrary later response of the next run.
+    /// Collect here, after the old run's references are dropped, so those reports reach the
+    /// start_run / load_save response (as `warnings`) instead.
+    /// </summary>
+    private static void SurfaceUnobservedTaskFailures()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+    }
+
     private void ResetRunScopedState()
     {
         ResetFlystsState();
@@ -4353,7 +4317,6 @@ public partial class RunSimulator
         _pendingRewards = null;
         _rewardsProcessed = false;
         _eventOptionChosen = false;
-        _lastEventOptionCount = 0;
         _textCache.Clear();
     }
 

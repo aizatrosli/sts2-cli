@@ -56,6 +56,26 @@ fi
 
 echo "📁 Game directory: $GAME_DIR"
 
+# ── Game version ──
+# The engine's patches, stubs and tests are pinned to one game build; another build usually
+# needs adapter changes (see README). STS2_ALLOW_GAME_VERSION=1 continues with a warning.
+EXPECTED_GAME_VERSION="v0.107.1"
+RELEASE_INFO="$(find "$GAME_DIR" "$(dirname "$GAME_DIR")" -maxdepth 1 -name release_info.json -print -quit 2>/dev/null)"
+if [ -n "$RELEASE_INFO" ]; then
+    GAME_VERSION="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("version", ""))' "$RELEASE_INFO" 2>/dev/null || true)"
+    if [ "$GAME_VERSION" = "$EXPECTED_GAME_VERSION" ]; then
+        echo "  ✓ Game version $GAME_VERSION"
+    elif [ "${STS2_ALLOW_GAME_VERSION:-}" = "1" ]; then
+        echo "⚠ Game version ${GAME_VERSION:-unknown}; this engine is pinned to $EXPECTED_GAME_VERSION (continuing: STS2_ALLOW_GAME_VERSION=1)"
+    else
+        echo "❌ Game version ${GAME_VERSION:-unknown}; this engine is pinned to $EXPECTED_GAME_VERSION."
+        echo "   Install that build, or set STS2_ALLOW_GAME_VERSION=1 to port to another one."
+        exit 1
+    fi
+else
+    echo "⚠ No release_info.json next to the game data; could not check the game version ($EXPECTED_GAME_VERSION expected)."
+fi
+
 # ── Copy DLLs ──
 
 mkdir -p lib

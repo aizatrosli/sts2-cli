@@ -95,3 +95,12 @@ class TestShopRemove:
             # Should return to shop with deck_size - 1
             if state.get("decision") == "shop":
                 assert state["player"]["deck_size"] == deck_before - 1
+
+
+def test_proceed_alias_leaves_the_shop(game):
+    """Auto flow lists leave_room in a shop; its documented alias proceed must do the same."""
+    game.skip_neow(game.start(seed="ss1"))
+    state = game.enter_room("shop")
+    assert any(a["action"] == "leave_room" for a in state["legal_actions"])
+    state = game.act("proceed")
+    assert state["decision"] == "map_select", state

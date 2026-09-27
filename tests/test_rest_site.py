@@ -55,3 +55,48 @@ class TestRestSiteActions:
         state = game.act("choose_option", option_index=smith["index"])
         assert state["decision"] == "card_select"
         assert len(state.get("cards", [])) > 0
+
+
+def test_rest_option_that_opens_a_card_reward_exports_it(game):
+    """Auto flow: Dream Catcher's heal offers a card reward; that is the next decision (it used to
+    return a stale map_select with the reward still pending), and picking it leaves for the map."""
+    game.skip_neow(game.start(seed="dream1"))
+    game.set_player(relics=["DREAM_CATCHER"], hp=20)
+    deck = len(game.send({"cmd": "get_state"})["player"]["deck"])
+    state = game.enter_room("rest_site")
+    heal = next(o for o in state["options"] if o["option_id"] == "HEAL")
+    state = game.act("choose_option", option_index=heal["index"])
+    assert state["decision"] == "card_reward", state
+    state = game.act("select_card_reward", card_index=0)
+    assert state["decision"] == "map_select", state
+    assert len(state["player"]["deck"]) == deck + 1
+
+
+def test_cancelled_smith_finishes_before_the_next_option(game):
+    """Auto flow: Smith, then skipping its grid, returns to the rest site; the Smith option task
+    must finish there. Left pending, it resumed after the next rest site's Heal had cleared the
+    options and threw inside RestSiteSynchronizer.ChooseOption (its log line re-reads
+    options[index]): an unobserved task exception. Reproduced by the random agent of
+    tools/trajectory.py (Silent auto, steps 62-64: Smith, skip_select, Heal); start_run collects
+    the torn-down run's tasks, so a failure shows up on its response."""
+    import random
+    rng = random.Random("Silent:auto:traj-silent")
+    game.send({"cmd": "start_run", "character": "Silent", "seed": "traj-silent", "flow": "auto"})
+    game.send({"cmd": "set_player", "hp": 9999, "max_hp": 9999})
+    state = game.send({"cmd": "get_state"})
+    trail = []
+    for _ in range(66):
+        a = rng.choice(state["legal_actions"])
+        if a.get("template"):
+            n = a["num_cards"]
+            lo, hi = a.get("min_select") or 0, min(a.get("max_select") or 0, n)
+            k = rng.randint(lo, max(lo, hi))
+            a = {"action": "select_cards", "args": {"indices": ",".join(map(str, sorted(rng.sample(range(n), k))))}}
+        else:
+            a = {k: v for k, v in a.items() if k in ("action", "args")}
+        trail.append((state.get("decision"), a["action"]))
+        state = game.send({"cmd": "action", **a})
+        assert not state.get("warnings"), state.get("warnings")
+    assert ("card_select", "skip_select") in trail   # the Smith skip is in the path
+    r = game.send({"cmd": "start_run", "character": "Silent", "seed": "rsa4", "flow": "auto"})
+    assert not r.get("warnings"), r.get("warnings")

@@ -1,5 +1,9 @@
 # STS2 v0.111.0 compatibility verification
 
+> **Historical.** The engine is pinned to v0.107.1 now (README, `setup.sh` checks the installed
+> version). This page records an earlier port to v0.111.0; its commands and test counts are not
+> current.
+
 Tested on macOS ARM64 on 2026-09-07 against Steam public-beta build **24724944**,
 game commit **41cef1ea** (installed release metadata).
 

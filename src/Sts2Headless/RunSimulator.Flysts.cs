@@ -93,6 +93,16 @@ internal sealed class FlystsSelection
 
     private void Complete(IEnumerable<CardModel> result) => Result = result.ToList();
 
+    /// <summary>skip_choice: NChooseACardSelectionScreen's skip button (shown when canSkip)
+    /// completes the screen with no card (OnSkipButtonReleased).</summary>
+    public string? Skip()
+    {
+        if (Kind != FlystsSelectionKind.ChooseACard) return "No choose-a-card screen is open";
+        if (!CanSkip) return "This choice cannot be skipped";
+        Complete(Array.Empty<CardModel>());
+        return null;
+    }
+
     /// <summary>select_deck_card / select_hand_card / choose_card. Returns an error text or null.</summary>
     public string? Pick(int index)
     {
@@ -276,16 +286,10 @@ public partial class RunSimulator
             if (string.IsNullOrWhiteSpace(profilePath) || !File.Exists(profilePath))
                 return Error($"profile not found: '{profilePath}' (a progress.save path is required)");
             EnsureModelDbInitialized();
+            // Validate everything first: a rejected start_run must leave the current run (and the
+            // progress it runs with) intact.
+            var progressBefore = SaveManager.Instance.Progress;
             if (!LoadFlystsProfile(profilePath, out var profileError)) return Error(profileError);
-
-            var seedStr = string.IsNullOrWhiteSpace(seed) ? SeedHelper.GetRandomSeed() : SeedHelper.CanonicalizeSeed(seed);
-            if (_runState != null) CleanUp();
-            ResetRunScopedState();
-            ResetManualFlowState();
-            ResetFlystsState();
-            _manualFlow = true;
-            FlystsMode = true;
-
             var progress = SaveManager.Instance.Progress;
             // The lobby carries each player's unlock state serialized (LobbyPlayer.unlockState).
             var unlocks = UnlockState.FromSerializable(SaveManager.Instance.GenerateUnlockStateFromProgress().ToSerializable());
@@ -294,15 +298,31 @@ public partial class RunSimulator
             // a locked character's button (UnlockState.Characters), and on the custom screen an
             // ascension above the lobby's max (StartRunLobby.SetSingleplayerAscensionAfterCharacterChanged:
             // the character's MaxAscension, or 0 until its ascension epoch is revealed).
+            string? lobbyError = null;
             if (!unlocks.Characters.Contains(characterModel))
-                return Error($"Character '{character}' is locked");
-            if (ascension != 0)
+                lobbyError = $"Character '{character}' is locked";
+            else if (ascension != 0)
             {
                 var stats = progress.GetOrCreateCharacterStats(characterModel.Id);
                 int lobbyMax = stats.MaxAscension > 0 && AscensionEpochRevealed(characterModel) ? stats.MaxAscension : 0;
                 if (ascension < 0 || ascension > lobbyMax)
-                    return Error($"Ascension {ascension} out of range (max unlocked for this character: {lobbyMax})");
+                    lobbyError = $"Ascension {ascension} out of range (max unlocked for this character: {lobbyMax})";
             }
+            if (lobbyError != null)
+            {
+                SaveManager.Instance.Progress = progressBefore;
+                return Error(lobbyError);
+            }
+
+            var seedStr = string.IsNullOrWhiteSpace(seed) ? SeedHelper.GetRandomSeed() : SeedHelper.CanonicalizeSeed(seed);
+            if (_runState != null) CleanUp();
+            ResetRunScopedState();
+            ResetManualFlowState();
+            ResetFlystsState();
+            SurfaceUnobservedTaskFailures();
+            _manualFlow = true;
+            FlystsMode = true;
+
             var acts = FlystsRollActs(seedStr, unlocks, progress);
             // StartRunLobby.BeginRunLocally: singleplayer ascension is capped at the character's max.
             int maxAscension = progress.GetOrCreateCharacterStats(characterModel.Id).MaxAscension;
@@ -383,6 +403,11 @@ public partial class RunSimulator
             error = $"Failed to parse profile {path}: {read.Status} {read.ErrorMessage}";
             return false;
         }
+        if (!_defaultProgressSaved)
+        {
+            _defaultProgress = SaveManager.Instance.Progress;
+            _defaultProgressSaved = true;
+        }
         var ctx = new DeserializationContext();
         SaveManager.Instance.Progress = ProgressState.FromSerializable(read.SaveData, ctx);
         foreach (var e in ctx.Errors) Log($"profile parse: {e}");
@@ -397,6 +422,17 @@ public partial class RunSimulator
             catch (Exception ex) { Log($"RevealEpoch {id}: {ex.Message}"); }
         }
         return true;
+    }
+
+    // The progress the default protocol runs with (the engine's own, before any profile was
+    // loaded). Game logic reads SaveManager.Progress during a run (WelcomeToWongos' badge,
+    // Vakuu, ActModel), so a default start_run / load_save puts it back.
+    private static ProgressState? _defaultProgress;
+    private static bool _defaultProgressSaved;
+
+    private static void RestoreDefaultProgress()
+    {
+        if (_defaultProgressSaved) SaveManager.Instance.Progress = _defaultProgress!;
     }
 
     private void ResetFlystsState()
@@ -661,7 +697,7 @@ public partial class RunSimulator
             if (action == "set_fast_mode") return FlystsResult("ok", "Fast mode is irrelevant headless", null);
             if (action == "abandon_run")
             {
-                _flystsAbandoned = true;
+                if (!_flystsAbandoned) FlystsAbandon();
                 return FlystsResult("ok", "Abandoning run", null);
             }
             if (_flystsAbandoned || FlystsNativeDecision() == "game_over")
@@ -672,6 +708,24 @@ public partial class RunSimulator
             return FlystsAdvance(native, message ?? "ok");
         }
         catch (Exception ex) { return ErrorWithTrace($"flysts action {action} failed", ex); }
+    }
+
+    /// <summary>RunManager.AbandonInternal: IsAbandoned, then GuaranteeKillAllPlayers
+    /// (CreatureCmd.Kill(force: true)); the game-over screen then reads hp 0 (captured live).</summary>
+    private void FlystsAbandon()
+    {
+        _flystsAbandoned = true;
+        try
+        {
+            typeof(RunManager).GetProperty(nameof(RunManager.IsAbandoned))?.GetSetMethod(true)?.Invoke(RunManager.Instance, new object[] { true });
+            var creature = _runState!.Players[0].Creature;
+            if (creature == null || creature.IsDead) return;
+            var kill = Task.Run(() => CreatureCmd.Kill(creature, force: true));
+            PollUntil(() => kill.IsCompleted, 5000);
+            if (kill.IsFaulted) PatchReport.EngineWarning($"abandon_run kill failed: {kill.Exception?.GetBaseException().Message}");
+            WaitForActionExecutor();
+        }
+        catch (Exception ex) { PatchReport.EngineWarning($"abandon_run: {ex.Message}"); }
     }
 
     private string? FlystsNativeDecision()
@@ -791,6 +845,15 @@ public partial class RunSimulator
                 err = FlystsResolveSelection(sel);
                 return err == null ? ($"Choosing card {index}", null) : (null, err);
             }
+            case "skip_choice":
+            {
+                var sel = FlystsCurrentSelection();
+                if (sel == null || sel.Kind != FlystsSelectionKind.ChooseACard) return (null, "No choose-a-card screen is open");
+                err = sel.Skip();
+                if (err != null) return (null, err);
+                err = FlystsResolveSelection(sel);
+                return err == null ? ("Skipping the choice", null) : (null, err);
+            }
             case "select_deck_card":
             {
                 var sel = FlystsCurrentSelection();
@@ -838,7 +901,17 @@ public partial class RunSimulator
             case "select_relic":
                 return (null, "No relic selection screen is open");
             case "menu_select":
-                return (null, "Not on a recognized menu screen");
+            {
+                // The auto-advanced screens are only shown when a step failed (FlystsAdvance);
+                // MenuAutomation takes menu_select on them, so step once and let the advance go on.
+                var native = _flystsNative ?? FlystsCurrentNative();
+                if (native.GetValueOrDefault("decision") as string is not ("rewards" or "treasure" or "crystal_sphere"))
+                    return (null, "Not on a recognized menu screen");
+                var step = FlystsAutoStep(native);
+                if (step == null) return (null, "Nothing to advance on this screen");
+                FlystsNative(step.Value.action, step.Value.args, out err);
+                return err == null ? ("Advanced the menu screen", null) : (null, err);
+            }
             default:
                 return (null, "Unknown action: " + action);
         }

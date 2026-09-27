@@ -91,7 +91,7 @@ The protocol channel (stdout) carries only JSON lines; everything else goes to s
 | `combat_play` | your turn in combat | `play_card {card_index[,target_index]}`, `use_potion {potion_index[,target_index]}`, `discard_potion {potion_index}`, `end_turn` |
 | `card_select` | any card choice screen (upgrade, remove, choose-a-card, including mid-enemy-turn choices like Knowledge Demon's curse) | `select_cards {indices}`, `skip_select` when `min_select` is 0 |
 | `bundle_select` | Scroll Boxes pack choice | `select_bundle {bundle_index}` |
-| `rewards` | the rewards screen (after combat, after opening a chest, rest-site/event reward sets) | `claim_reward {reward_index}`, `proceed`, and `discard_potion` when a potion reward is blocked by full slots |
+| `rewards` | the rewards screen (after combat, after opening a chest, rest-site/event reward sets) | `claim_reward {reward_index}`, `proceed`, and the out-of-combat potion actions (`use_potion` / `discard_potion`, also how you make room for a potion reward blocked by full slots) |
 | `card_reward` | card reward screen opened by claiming a card reward | `select_card_reward {card_index}`, `skip_card_reward`, `select_card_reward_alternative {alternative_index}` (e.g. Reroll) |
 | `event_choice` | event / Ancient dialogue | `choose_option {option_index}`. A finished event shows one option `{"index": 0, "is_proceed": true}`. |
 | `rest_site` | campfire | `choose_option {option_index}`; `proceed` once `can_proceed` is true (after a successful choice). Options stay available when a relic allows more than one. |

@@ -82,7 +82,19 @@ shows:
 | card `vars` | `ClearPreview` + `UpdateDynamicVarPreview(Normal, CurrentTarget)` as `NCard.UpdateVisuals` does, cleared again afterwards |
 | hand selection (`hand_selection`, `selected`, `selectable`, `can_confirm`, `hand_prompt`/min/max) | `FlystsSelection` (below) |
 | grid screens (`selected`, `selected_count`, `preview_open`, `can_confirm`, `min/max_select`, `prompt`, `enchantment(_amount)`) | `FlystsSelection`; prefs from `SelectionPrefsPatches` |
-| game over `score` | `ScoreUtility.CalculateScore`; `options: ["main_menu"]` |
+| game over `score` | `ScoreUtility.CalculateScore`; `options: ["main_menu"]` (the screen's settled button) |
+| game over `cause`, `run_time` | the mod's `NRunHistory.GetGameOverType` order (win `FalseVictory`, `AbandonedRun`, `CombatDeath`, `EventDeath`, else `None`) applied to the run, since the engine has no `RunHistory`; `RunManager.RunTime` (wall-clock seconds) |
+
+In combat the player also carries its character resources (added to the mod and the engine
+together, 2026-09-27): `orb_slots` and `orbs` `[{id, passive, evoke}]` (the orb queue in
+order; `PassiveVal` / `EvokeVal`, which include Focus) and `pets` `[{id, hp, max_hp, block,
+alive, powers}]` (`PlayerCombatState.Pets`: Osty, Byrdpip; not in `monsters`). Hand cards carry
+`calculated_hits` (a `CalculatedHits` var's `CalculatedVar.Calculate`, computed at the read like
+`OnPlay` does: Finisher, Rattle, Barrage, ...; null for other cards) and `glow_gold` /
+`glow_red` (`CardModel.ShouldGlowGold/Red`: Spite after HP loss this turn, an Osty card with Osty
+missing); relics carry `status` (`RelicModel.Status`: `normal`, `active` = about to trigger,
+`disabled`). Captured on the game: Defect's orbs after Zap and Dualcast, Necrobinder's Osty,
+Byrdpip, Finisher's hits and Spite's glow after Bloodletting.
 
 Grid card order is the screen's: the options' order, except the combat draw pile, which
 `NCombatPileCardSelectScreen` sorts by rarity, title, then id.
@@ -117,9 +129,15 @@ keeps the selector's blocking order.
 `choose_map_node {index}`, `shop_purchase {index}` (the inventory's `AllEntries` order),
 `leave_shop`, `choose_event_option {index}`, `choose_rest_option {index}`, `leave_rest_site`,
 `select_card_reward {card_index}`, `select_card_reward_alternative {index}`,
-`select_bundle {index}`, `choose_card {card_index}`, `select_deck_card {card_index}`,
-`select_hand_card {card_index}`, `confirm`, `cancel_selection`, `abandon_run`,
-`set_fast_mode` (no-op). Targets are 0-based indices into the alive enemies.
+`select_bundle {index}`, `choose_card {card_index}`, `skip_choice` (a choose-a-card screen's
+skip button, when `can_skip`), `select_deck_card {card_index}`, `select_hand_card
+{card_index}`, `confirm`, `cancel_selection`, `abandon_run`, `menu_select` (only on a
+`combat_rewards` / `treasure_room` / `crystal_sphere` menu, which shows only if an auto-advance
+step failed: one step of it), `set_fast_mode` (no-op). Targets are 0-based indices into the
+alive enemies.
+
+`abandon_run` is `RunManager.AbandonInternal`: the player is killed (`CreatureCmd.Kill` with
+force), so the game-over payload reads hp 0 and `cause: AbandonedRun` (captured on the game).
 
 `use_potion` while a selection is open (a hand prompt, a choose-a-card or pile screen, a card
 reward) enqueues the potion like the mod (`PotionModel.EnqueueManualUse`) when its usability rule
@@ -135,6 +153,13 @@ passes: the slot reads `usable: false` while queued and the potion runs after th
 - The Fake Merchant event reports its options as the mod does (none), so a trainer strands on
   it as it does live (captured on the game through the mod's debug console, 2026-09-26: no
   options, `choose_event_option` answers "No event options available").
+- The game-over screen's `options` follow its animation live (`continue`, then `main_menu`; an
+  abandon read right away showed none); the engine reports the settled `["main_menu"]`.
+- `end_turn` while a hand prompt is open (Burning Pact's exhaust): live the mod answers ok and
+  the game queues the end of turn behind the prompt (`is_play_phase` false, the prompt still
+  open); the engine refuses it ("Not in play phase"). Captured on the game 2026-09-27. The
+  trainer's mask offers only the hand cards and confirm during a hand prompt
+  (`Policy._build_action_mask`), so no trainer action reaches this.
 - Trial's "Double Down" opens the abandon-run popup, which the mod never sees or confirms: the
   page stays (Accept / Double Down) and Accept then runs the trial as usual (captured on the
   game). The default protocol still abandons the run.

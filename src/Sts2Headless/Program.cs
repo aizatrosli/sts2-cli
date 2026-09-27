@@ -200,6 +200,14 @@ class Program
                     cmd.TryGetProperty("act1", out var act1) ? act1.GetString() : null
                 );
 
+            case "action" when RunSimulator.FlystsMode:
+                // Native actions would move the run under the flysts payload's cached decision.
+                return new Dictionary<string, object?>
+                {
+                    ["type"] = "error",
+                    ["message"] = "'action' is not available in a flysts run; use flysts_action",
+                };
+
             case "action":
             {
                 var action = cmd.GetProperty("action").GetString() ?? "";

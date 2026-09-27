@@ -134,6 +134,10 @@ public partial class RunSimulator
     }
 
     private static int? SafeInt(Func<int> getter) { try { return getter(); } catch { return null; } }
+    private static long? SafeLong(Func<long> getter) { try { return getter(); } catch { return null; } }
+
+    private static string NRunHistoryGameOverType(MegaCrit.Sts2.Core.Runs.RunHistory history) =>
+        MegaCrit.Sts2.Core.Nodes.Screens.RunHistoryScreen.NRunHistory.GetGameOverType(history).ToString();
     private static bool SafeBool(Func<bool> getter) { try { return getter(); } catch { return false; } }
     private static string? SafeString(Func<string> getter) { try { return getter(); } catch { return null; } }
     private static List<string>? SafeList(Func<List<string>> getter) { try { return getter(); } catch { return null; } }
@@ -147,6 +151,9 @@ public partial class RunSimulator
             ["name"] = FlystsTitle(() => r.Title),
             ["counter"] = SafeBool(() => r.ShowCounter) ? SafeInt(() => r.DisplayAmount) : null,
             ["used_up"] = SafeBool(() => r.IsUsedUp),
+            // RelicModel.Status: Active is the icon's "about to trigger" glow (Pen Nib at 9
+            // attacks, Nunchaku one attack short), Disabled greyed out (2026-09-27)
+            ["status"] = SafeString(() => r.Status.ToString().ToLowerInvariant()),
             ["stack"] = SafeInt(() => r.StackCount),
             ["rarity"] = SafeString(() => r.Rarity.ToString().ToLowerInvariant()),
         }).ToList();
@@ -299,6 +306,23 @@ public partial class RunSimulator
                 ["exhaust"] = pcs.ExhaustPile.Cards.Select(c => c.Id.Entry).ToList(),
                 ["play"] = pcs.PlayPile.Cards.Select(c => c.Id.Entry).ToList(),
             };
+            // Character resources (GameState.cs): the orb queue (values include Focus) and pets.
+            state["orb_slots"] = pcs.OrbQueue.Capacity;
+            state["orbs"] = pcs.OrbQueue.Orbs.Select(o => new Dictionary<string, object?>
+            {
+                ["id"] = o.Id.Entry,
+                ["passive"] = SafeInt(() => (int)o.PassiveVal),
+                ["evoke"] = SafeInt(() => (int)o.EvokeVal),
+            }).ToList();
+            state["pets"] = pcs.Pets.Select(pet => new Dictionary<string, object?>
+            {
+                ["id"] = pet.Monster?.Id.Entry,
+                ["hp"] = pet.CurrentHp,
+                ["max_hp"] = pet.MaxHp,
+                ["block"] = pet.Block,
+                ["alive"] = pet.IsAlive,
+                ["powers"] = FlystsPowers(pet),
+            }).ToList();
         }
         var hand = new List<Dictionary<string, object?>>();
         if (pcs != null)
@@ -443,6 +467,15 @@ public partial class RunSimulator
         entry["enchantment"] = SafeString(() => card.Enchantment?.Id.Entry ?? "");
         entry["enchantment_amount"] = SafeInt(() => card.Enchantment?.Amount ?? 0);
         entry["affliction"] = SafeString(() => card.Affliction?.Id.Entry ?? "");
+        // 2026-09-27 (audit): hit counts decided at play time. A CalculatedHits var is the
+        // game's own count (CalculatedVar.Calculate, as OnPlay runs it: Finisher, Rattle,
+        // Barrage, ...), computed now rather than the face's PreviewValue cache; the card glows
+        // gold / red when its condition holds (Spite: lost HP this turn; an Osty card: Osty
+        // missing, when it does nothing).
+        entry["calculated_hits"] = card.DynamicVars.TryGetValue("CalculatedHits", out var hv) && hv is CalculatedVar hits
+            ? SafeInt(() => (int)hits.Calculate(null)) : null;
+        entry["glow_gold"] = SafeBool(() => card.ShouldGlowGold);
+        entry["glow_red"] = SafeBool(() => card.ShouldGlowRed);
     }
 
     /// <summary>GameState.AddCardCombatPreview: damage_vs per alive enemy and block_now through the
@@ -876,6 +909,15 @@ public partial class RunSimulator
             killedBy = SafeString(() => er.CanonicalEvent?.Id.Entry ?? "");
         int? score = null;
         try { score = ScoreUtility.CalculateScore(RunManager.Instance.ToSave(null), victory); } catch { }
+        // The mod's `cause` is NRunHistory.GetGameOverType(RunHistory): win, then abandoned, then a
+        // combat, then an event death. The engine has no RunHistory (RunManager.OnEnded runs from
+        // the game-over UI), so the same order is applied to what it knows.
+        string cause = history != null ? SafeString(() => NRunHistoryGameOverType(history)) ?? "None"
+            : victory ? "FalseVictory"
+            : _flystsAbandoned ? "AbandonedRun"
+            : runState.CurrentRoom is CombatRoom ? "CombatDeath"
+            : runState.CurrentRoom is EventRoom ? "EventDeath"
+            : "None";
         var state = new Dictionary<string, object?>
         {
             ["state_type"] = "game_over",
@@ -885,8 +927,11 @@ public partial class RunSimulator
             ["message"] = victory ? "Run ended in victory." : "Run ended.",
             ["options"] = new List<string> { "main_menu" },
             ["run"] = FlystsRunInfo(runState),
+            ["cause"] = cause,
             ["killed_by"] = killedBy,
-            ["abandoned"] = false,
+            ["abandoned"] = _flystsAbandoned,
+            // RunManager.RunTime (wall-clock seconds, like the game's RunHistory.RunTime)
+            ["run_time"] = SafeLong(() => RunManager.Instance.RunTime),
             ["score"] = score,
         };
         if (me != null)

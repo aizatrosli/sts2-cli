@@ -90,6 +90,7 @@ start, then answers each command line with one JSON line. All names are in Engli
 | `get_map` | — | `map` (all nodes, edges, visited path, boss) |
 | `load_save` | `path` or `json`, `flow` | decision where the save resumes |
 | `write_continue_save` | `path` | `save_result` (`success`, `path`, `size`, `room_type`) |
+| `content_catalog` | `profile` (optional progress.save: adds `unlocked` per entry) | `content_catalog` (characters, cards, relics, potions, events, encounters, monsters, powers, enchantments, afflictions) |
 | `quit` | `path` (optional: save first) | `quit_result`, or `save_error` if the save failed (the engine keeps running) |
 | `set_player` * | `hp`, `max_hp`, `gold`, `deck`, `relics`, `potions` (ids) | `ok` |
 | `enter_room` * | `type` (`monster`/`combat`, `elite`, `event`, `rest`, `shop`, `treasure`), `encounter`, `event` | decision in that room |
@@ -99,6 +100,9 @@ start, then answers each command line with one JSON line. All names are in Engli
 | `add_card` * | `card` (id), `pile` (default `Hand`, like the console's `card`) | decision |
 
 \* Debug commands, accepted only when the engine starts with `--debug` or `STS2_DEBUG_COMMANDS=1`.
+A refused debug command changes nothing; `enter_room`, `enter_ancient` and `obtain_relic` are
+refused while a selection is open. The flysts payload mode (`start_run {payload: "flysts"}`,
+`docs/flysts_payload.md`) takes `flysts_state` / `flysts_action` instead of `action`.
 Any command may carry a `request_id`, which the response echoes.
 
 Response `type`s: `ready`, `decision` (with `decision` naming the screen and `legal_actions`),

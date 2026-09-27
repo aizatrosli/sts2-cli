@@ -392,9 +392,11 @@ def test_touch_of_orobas_upgrades_the_starter_then_gives_circlet(game):
 def test_obtain_relic_runs_its_pickup(game):
     """`obtain_relic` is `relic add` (RelicCmd.Obtain): Astrolabe's pickup opens its transform."""
     start(game)
+    assert game.send({"cmd": "obtain_relic", "relic": "NOT_A_RELIC"})["message"] == "Unknown relic: NOT_A_RELIC"
     r = game.send({"cmd": "obtain_relic", "relic": "ASTROLABE"})
     assert r["state"]["state_type"] == "deck_transform" and "ASTROLABE" in _relics(r["state"])
-    assert game.send({"cmd": "obtain_relic", "relic": "NOT_A_RELIC"})["message"] == "Unknown relic: NOT_A_RELIC"
+    # its selection is open: another pickup (or a room change) waits until it is resolved
+    assert "a selection is pending" in game.send({"cmd": "obtain_relic", "relic": "VAJRA"})["message"]
 
 
 def test_wongo_badge_at_2000_profile_points(game, tmp_path):
@@ -420,3 +422,118 @@ def test_add_card_is_the_card_console_command(game):
     assert r["state"]["player"]["hand"][-1]["id"] == "POKE" and r["state"]["player"]["hand"][-1]["damage_vs"]
     assert game.send({"cmd": "add_card", "card": "POKE", "pile": "Nowhere"})["type"] == "error"
     assert game.send({"cmd": "add_card", "card": "NOT_A_CARD"})["message"] == "Unknown card: NOT_A_CARD"
+
+
+def test_refused_start_keeps_the_run_in_progress(game):
+    """The lobby checks run before the current run is torn down (like the default start_run)."""
+    assert start(game, character="Silent")["status"] == "ok"
+    r = game.send({"cmd": "start_run", "payload": "flysts", "character": "Ironclad", "game_mode": "custom",
+                   "profile": PROFILE, "seed": "X", "ascension": 99})
+    assert r["type"] == "error" and "Ascension 99 out of range" in r["message"], r
+    # start(Silent) replaced the Ironclad run; the refused start must leave that one
+    state = game.send({"cmd": "flysts_state"})["state"]
+    assert state["player"]["character"] == "The Silent"
+    assert act(game, "choose_event_option", index=0)["status"] == "ok"
+
+
+def test_native_actions_refused_in_a_flysts_run(game):
+    before = start(game)["state"]
+    r = game.send({"cmd": "action", "action": "choose_option", "args": {"option_index": 0}})
+    assert r["type"] == "error" and "flysts_action" in r["message"], r
+    assert game.send({"cmd": "flysts_state"})["state"] == before
+
+
+def test_profile_does_not_leak_into_default_runs(game, tmp_path):
+    """Game logic reads SaveManager.Progress during a run (WelcomeToWongos' badge): a default run
+    after a flysts run uses the engine's own progress again, not the loaded profile."""
+    import json
+    prof = json.loads(open(PROFILE).read())
+    prof["wongo_points"] = 1999
+    path = tmp_path / "progress.save"
+    path.write_text(json.dumps(prof))
+
+    def default_wongo_relics():
+        game.start(seed="WONGO1")
+        game.send({"cmd": "set_player", "gold": 300})
+        state = game.send({"cmd": "enter_room", "type": "event", "event": "WELCOME_TO_WONGOS"})
+        idx = next(o["index"] for o in state["options"] if "BARGAIN" in json.dumps(o).upper())
+        game.act("choose_option", option_index=idx)
+        return [r["id"] for r in game.send({"cmd": "get_state"})["player"]["relics"]]
+
+    fresh = default_wongo_relics()
+    assert "WONGO_CUSTOMER_APPRECIATION_BADGE" not in fresh
+    r = game.send({"cmd": "start_run", "payload": "flysts", "character": "Ironclad", "seed": "X",
+                   "game_mode": "custom", "profile": str(path)})
+    assert r["type"] == "flysts", r
+    assert default_wongo_relics() == fresh
+
+
+def test_character_resources_in_combat(game):
+    """The orb queue (Defect; values include Focus) and the player's pets (Osty) are in the combat
+    payload (GameState.BuildCombatPlayerState: orb_slots, orbs, pets)."""
+    start(game, character="Defect")
+    game.send({"cmd": "set_player", "deck": ["ZAP"] * 6})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+    p = game.send({"cmd": "flysts_state"})["state"]["player"]
+    assert p["orb_slots"] == 3 and p["pets"] == []
+    before = len(p["orbs"])
+    assert before >= 1  # Cracked Core channels a Lightning at the start of combat
+    assert all(o["id"] == "LIGHTNING_ORB" and (o["passive"], o["evoke"]) == (3, 8) for o in p["orbs"])
+    r = act(game, "play_card", card_index=0)
+    assert r["status"] == "ok", r
+    assert len(r["state"]["player"]["orbs"]) == before + 1
+
+    state, _ = _osty_hand(game, ["BOUND_PHYLACTERY"])
+    pets = state["player"]["pets"]
+    assert [x["id"] for x in pets] == ["OSTY"] and pets[0]["alive"] and pets[0]["hp"] > 0, pets
+    assert state["player"]["orbs"] == [] and "OSTY" not in [m["id"] for m in state["monsters"]]
+
+
+def test_skip_choice_on_a_skippable_choose_a_card(game):
+    """skip_choice is NChooseACardSelectionScreen's skip button (canSkip: Lead Paperweight's
+    pickup): the screen completes with no card."""
+    start(game)
+    deck = [c["id"] for c in game.send({"cmd": "flysts_state"})["state"]["player"]["deck"]]
+    r = game.send({"cmd": "obtain_relic", "relic": "LEAD_PAPERWEIGHT"})
+    assert r["state"]["state_type"] == "choose_a_card" and r["state"]["can_skip"] is True, r["state"]
+    r = act(game, "skip_choice")
+    assert r["status"] == "ok" and r["state"]["state_type"] != "choose_a_card", r
+    assert [c["id"] for c in r["state"]["player"]["deck"]] == deck
+    assert act(game, "skip_choice")["error"] == "No choose-a-card screen is open"
+
+
+def test_abandon_run_kills_the_player_like_the_game(game):
+    """RunManager.AbandonInternal kills every player (CreatureCmd.Kill force): the game-over
+    payload reads hp 0 and cause AbandonedRun (captured live 2026-09-27), in and out of combat."""
+    for enter_combat in (False, True):
+        start(game)
+        if enter_combat:
+            game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+        r = act(game, "abandon_run")
+        s = r["state"]
+        assert r["status"] == "ok" and s["state_type"] == "game_over", r
+        assert s["player"]["hp"] == 0 and s["abandoned"] is True and s["cause"] == "AbandonedRun", s
+        assert isinstance(s["run_time"], int)
+        assert act(game, "end_turn")["error"] == "No run in progress"
+
+
+def test_play_time_hit_counts_and_glows(game):
+    """Hand cards carry `calculated_hits` (the card's CalculatedVar, computed now: Finisher counts
+    this turn's attacks), `glow_gold` / `glow_red` (Spite after HP loss this turn) and relics
+    their `status` (RelicModel.Status)."""
+    start(game)
+    game.send({"cmd": "set_player", "deck": ["FINISHER", "BLOODLETTING", "SPITE", "STRIKE_IRONCLAD", "DEFEND_IRONCLAD"]})
+    game.send({"cmd": "enter_room", "type": "combat", "encounter": "SHRINKER_BEETLE_WEAK"})
+    s = game.send({"cmd": "flysts_state"})["state"]
+    hand = {c["id"]: c for c in s["player"]["hand"]}
+    assert hand["FINISHER"]["calculated_hits"] == 0 and hand["STRIKE_IRONCLAD"]["calculated_hits"] is None
+    assert hand["SPITE"]["glow_gold"] is False
+    assert all(r["status"] in ("normal", "active", "disabled") for r in s["player"]["relics"])
+    ids = [c["id"] for c in s["player"]["hand"]]
+    r = act(game, "play_card", card_index=ids.index("STRIKE_IRONCLAD"), target=0)
+    hand = {c["id"]: c for c in r["state"]["player"]["hand"]}
+    assert hand["FINISHER"]["calculated_hits"] == 1
+    ids = [c["id"] for c in r["state"]["player"]["hand"]]
+    r = act(game, "play_card", card_index=ids.index("BLOODLETTING"))
+    hand = {c["id"]: c for c in r["state"]["player"]["hand"]}
+    assert hand["SPITE"]["glow_gold"] is True, hand["SPITE"]

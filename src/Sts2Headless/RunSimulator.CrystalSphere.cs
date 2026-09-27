@@ -89,11 +89,7 @@ public partial class RunSimulator
         Log($"Crystal Sphere: divining ({x},{y}) with {toolName} tool");
         mg.SetTool(tool.Value);
         var click = Task.Run(() => mg.CellClicked(cell));
-        for (int i = 0; i < 2500 && !click.IsCompleted; i++)
-        {
-            _syncCtx.Pump();
-            Thread.Sleep(2);
-        }
+        PollUntil(() => click.IsCompleted, 5000);
         if (click.IsFaulted)
             Log($"Crystal Sphere click failed: {click.Exception?.GetBaseException().Message}");
 
@@ -103,14 +99,12 @@ public partial class RunSimulator
         // Out of divinations: the event resumes (rewards for revealed items, then the event finishes).
         _pendingCrystalSphere = null;
         if (_manualFlow) return ResumeBackgroundWork();
-        for (int i = 0; i < 2500; i++)
+        PollUntil(() =>
         {
-            _syncCtx.Pump();
-            if (HasPendingSelection) break;
+            if (HasPendingSelection) return true;
             var ev = RunManager.Instance.EventSynchronizer?.GetLocalEvent();
-            if (ev == null || ev.IsFinished || _runState?.CurrentRoom is not EventRoom) break;
-            Thread.Sleep(2);
-        }
+            return ev == null || ev.IsFinished || _runState?.CurrentRoom is not EventRoom;
+        }, 5000);
         WaitForActionExecutor();
         return DetectDecisionPoint();
     }

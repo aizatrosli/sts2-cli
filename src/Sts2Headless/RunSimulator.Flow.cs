@@ -361,7 +361,7 @@ public partial class RunSimulator
                 _syncCtx.Pump();
                 WaitForActionExecutor();
             }
-            catch (Exception ex) { Log($"EnterNextAct: {ex.Message}"); }
+            catch (Exception ex) { PatchReport.EngineWarning($"EnterNextAct: {ex.Message}"); }
             return DetectDecisionPoint();
         }
 
@@ -372,7 +372,7 @@ public partial class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
         }
-        catch (Exception ex) { Log($"ProceedFromTerminalRewardsScreen: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.EngineWarning($"ProceedFromTerminalRewardsScreen: {ex.Message}"); }
 
         if (_runState?.CurrentRoom is CombatRoom)
             return LeaveToMap();
@@ -399,7 +399,7 @@ public partial class RunSimulator
                 WaitForActionExecutor();
             }
         }
-        catch (Exception ex) { Log($"LeaveToMap: {ex.Message}"); }
+        catch (Exception ex) { PatchReport.EngineWarning($"LeaveToMap: {ex.Message}"); }
         return DetectDecisionPoint();
     }
 
@@ -492,7 +492,6 @@ public partial class RunSimulator
                     return Error($"Event option {optionIndex} is locked");
                 var option = options[optionIndex];
                 _eventOptionChosen = true;
-                _lastEventOptionCount = options.Count;
                 TrackBackground(Task.Run(() => option.Chosen()));
                 return ResumeBackgroundWork();
             }
