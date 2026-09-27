@@ -621,11 +621,12 @@ public partial class RunSimulator
 
     // ---- shop / event / rest / card reward / grids ---------------------------
 
-    private Dictionary<string, object?> FlystsShopState(RunState runState, Player player, MerchantRoom merchantRoom)
+    /// <summary>GameState.BuildShopState: a merchant room's inventory, or the Fake Merchant's relic shop.</summary>
+    private Dictionary<string, object?> FlystsShopState(RunState runState, Player player, MerchantInventory inventory, bool fakeMerchant)
     {
         var items = new List<Dictionary<string, object?>>();
         int i = 0;
-        foreach (var entry in merchantRoom.GetLocalInventory().AllEntries)
+        foreach (var entry in inventory.AllEntries)
         {
             items.Add(new Dictionary<string, object?>
             {
@@ -644,6 +645,7 @@ public partial class RunSimulator
         return new()
         {
             ["state_type"] = "shop",
+            ["fake_merchant"] = fakeMerchant,
             ["last_purchase"] = _flystsLastPurchase,
             ["run"] = FlystsRunInfo(runState),
             ["player"] = FlystsPlayerSummary(player),
@@ -746,23 +748,11 @@ public partial class RunSimulator
             // mod reports the BUTTON's state: a model-disabled option (Smith with nothing left to
             // upgrade) gets an enabled but unclickable button (NRestSiteButton._isUnclickable), so
             // it is listed enabled and choosing it fails "is disabled", as choose_rest_option does.
+            // A chosen option leaves room.Options when it succeeds, and the mod lists only buttons
+            // whose option is still there (GameState.RestSiteButtons): the greyed buttons of a
+            // finished choice, freed after its post-select VFX, are not reported.
             options.Add(new Dictionary<string, object?> { ["index"] = i, ["option_id"] = option.OptionId, ["enabled"] = !resolving, ["leave"] = false });
             i++;
-        }
-        if (!resolving && _restSiteChoiceMade && room.Options.Count == 0 && _flystsRestOverlay && _flystsRestButtons != null)
-        {
-            // NRestSiteRoom.OnActiveScreenUpdated: when a screen the option opened (Smith's upgrade
-            // grid, Tiny Mailbox's potion rewards) closes, the room is the active screen again with
-            // no options left and Proceed enables at once, while the buttons HideChoices greyed stay
-            // until the option's post-select VFX ends and UpdateRestSiteOptions frees them (1-2 s).
-            // The mod lists them disabled in that window, which is where the trainer's next read
-            // lands (every logged live row after a Smith or a Tiny Mailbox Rest; a plain Rest
-            // opens no screen and shows only Proceed).
-            foreach (var id in _flystsRestButtons)
-            {
-                options.Add(new Dictionary<string, object?> { ["index"] = i, ["option_id"] = id, ["enabled"] = false, ["leave"] = false });
-                i++;
-            }
         }
         options.Add(new Dictionary<string, object?> { ["index"] = i, ["leave"] = true, ["enabled"] = !resolving && (_restSiteChoiceMade || room.Options.Count == 0) });
         return new()
@@ -925,7 +915,8 @@ public partial class RunSimulator
             ["done"] = true,
             ["screen_ready"] = true,
             ["message"] = victory ? "Run ended in victory." : "Run ended.",
-            ["options"] = new List<string> { "main_menu" },
+            // the enabled button once the screen is up: continue, then (clicked) main menu
+            ["options"] = new List<string> { _flystsGameOverContinued ? "main_menu" : "continue" },
             ["run"] = FlystsRunInfo(runState),
             ["cause"] = cause,
             ["killed_by"] = killedBy,

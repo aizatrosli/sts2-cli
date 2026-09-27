@@ -74,15 +74,18 @@ shows:
 
 | field | headless value |
 |---|---|
-| `resolving` | the engine's own expression (`ActionExecutor.IsRunning \|\| !ActionQueueSet.IsEmpty`): false at a settled decision |
+| `resolving` | the engine's own expression (`ActionExecutor.IsRunning \|\| !ActionQueueSet.IsEmpty`): false at a settled decision; also on the map, shop, rest site and event screens, where an out-of-combat potion resolves (`GameState.WithResolving`, 2026-09-27) |
 | `map.traveling` | false; `next_options` = travelable points sorted by (col, row) |
 | event `enabled` | true (every logged live option read true; `locked` carries the lock) |
 | rest options / leave `enabled` | the BUTTON's state, as the mod reads it: true (a model-disabled option such as Smith with nothing to upgrade keeps an enabled, unclickable button; choosing it fails "is disabled"), false while a chosen option resolves; leave after a choice |
-| rest site after a choice that opened a screen (Smith's upgrade grid, Tiny Mailbox's potion rewards) | the room's buttons from before the choice, disabled, then leave enabled: the screen closing re-activates the room with no options left, so Proceed enables before the post-select VFX ends and `UpdateRestSiteOptions` frees the greyed buttons (`NRestSiteRoom.OnActiveScreenUpdated`); every logged live read lands in that window. A plain Rest shows only leave |
-| card `vars` | `ClearPreview` + `UpdateDynamicVarPreview(Normal, CurrentTarget)` as `NCard.UpdateVisuals` does, cleared again afterwards |
+| rest site after a choice | the options still in `room.Options` (a chosen one leaves it when it succeeds, `RestSiteSynchronizer.ChooseOption`), then leave. The mod lists only those buttons (`GameState.RestSiteButtons`, 2026-09-27): the greyed buttons that stay until the post-select VFX ends are not reported, so the read does not depend on its timing (captured live, sim and animated) |
+| card `vars` | `ClearPreview` + `UpdateDynamicVarPreview(Normal, CurrentTarget)` as `NCard.UpdateVisuals` does, cleared again afterwards. The mod runs the same refresh and puts the display values back (2026-09-27): live, in NonInteractiveMode, the hand's faces were not refreshed after a power changed |
+| relic `counter` | `DisplayAmount`. The mod reads it with the relic's `_isActivating` cleared (2026-09-27): 21 relics show their threshold during the 1 s activation flash, which the engine's instant `Cmd.Wait` never shows |
+| Fake Merchant | a `shop` (`fake_merchant: true`) of the event's `MerchantInventory` (six fake relics) and leave, as the mod reads his custom layout (`GameState.ActiveFakeMerchant`, 2026-09-27); `shop_purchase` buys, `leave_shop` is his Proceed (the map). After a Foul Potion starts his fight, an event with no options until the combat |
+| Foul Potion outside combat | thrown with no creature, as the game's own drop on the merchant (`NPotionHolder` → `EnqueueManualUse(null)`): +100 gold in a shop, the Fake Merchant's fight at his event (captured live 2026-09-27) |
 | hand selection (`hand_selection`, `selected`, `selectable`, `can_confirm`, `hand_prompt`/min/max) | `FlystsSelection` (below) |
 | grid screens (`selected`, `selected_count`, `preview_open`, `can_confirm`, `min/max_select`, `prompt`, `enchantment(_amount)`) | `FlystsSelection`; prefs from `SelectionPrefsPatches` |
-| game over `score` | `ScoreUtility.CalculateScore`; `options: ["main_menu"]` (the screen's settled button) |
+| game over `score` | `ScoreUtility.CalculateScore`; `options: ["continue"]`, then `["main_menu"]` after `menu_select continue` (`NGameOverScreen`: continue is the enabled button once the screen is up, and opens the summary whose end enables main menu); `main_menu` then answers that `start_run` begins the next run |
 | game over `cause`, `run_time` | the mod's `NRunHistory.GetGameOverType` order (win `FalseVictory`, `AbandonedRun`, `CombatDeath`, `EventDeath`, else `None`) applied to the run, since the engine has no `RunHistory`; `RunManager.RunTime` (wall-clock seconds) |
 
 In combat the player also carries its character resources (added to the mod and the engine
@@ -147,14 +150,9 @@ passes: the slot reads `usable: false` while queued and the potion runs after th
 ## Known differences from the live game
 
 - Timing artifacts of the live UI are absent: reads mid-resolution, map clicks during the
-  travel animation, buttons disabled during animations, a relic counter held during its
-  activation animation (Kusarigama's `IsActivating`).
+  travel animation, buttons disabled during animations, the game-over screen before its
+  buttons enable (an abandon read right away shows none).
 - The Architect epilogue after the final boss is skipped (manual flow's victory).
-- The Fake Merchant event reports its options as the mod does (none), so a trainer strands on
-  it as it does live (captured on the game through the mod's debug console, 2026-09-26: no
-  options, `choose_event_option` answers "No event options available").
-- The game-over screen's `options` follow its animation live (`continue`, then `main_menu`; an
-  abandon read right away showed none); the engine reports the settled `["main_menu"]`.
 - `end_turn` while a hand prompt is open (Burning Pact's exhaust): live the mod answers ok and
   the game queues the end of turn behind the prompt (`is_play_phase` false, the prompt still
   open); the engine refuses it ("Not in play phase"). Captured on the game 2026-09-27. The

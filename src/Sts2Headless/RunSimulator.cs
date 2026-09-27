@@ -3674,9 +3674,10 @@ public partial class RunSimulator
         public SelectionPrefsPatches.Info? PendingInfo { get; private set; }
         private TaskCompletionSource<IEnumerable<CardModel>>? _pendingTcs;
         /// <summary>Identity of the pending selection (a new one gets a new task).</summary>
-        public object? PendingToken => HasPending ? _pendingTcs : null;
+        public object? PendingToken => _pendingTcs is { } tcs && !tcs.Task.IsCompleted ? tcs : null;
 
-        public bool HasPending => _pendingTcs != null && !_pendingTcs.Task.IsCompleted;
+        // one read of the field: the engine thread sets it and the main loop clears it
+        public bool HasPending => _pendingTcs is { } tcs && !tcs.Task.IsCompleted;
 
         public Task<IEnumerable<CardModel>> GetSelectedCards(
             IEnumerable<CardModel> options, int minSelect, int maxSelect)
@@ -3739,12 +3740,17 @@ public partial class RunSimulator
             PendingPrompt = info?.Prompt ?? "";
             PendingSource = info?.Source ?? "";
             PendingInfo = info;
-            _pendingTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
+            var tcs = new TaskCompletionSource<IEnumerable<CardModel>>();
+            _pendingTcs = tcs;
 
             Console.Error.WriteLine($"[SIM] Card selection pending: {optList.Count} options, select {minSelect}-{maxSelect}");
 
-            // Return the task — the main loop will complete it
-            return _pendingTcs.Task;
+            // Return the task — the main loop will complete it. The local, not the field: once
+            // _pendingTcs is set the main loop can export the selection, take the answer and clear
+            // the field (ResolvePending) before this thread gets here, and `_pendingTcs.Task` then
+            // threw NullReferenceException, failing the selection's command (seen under load: a
+            // shop card removal left undone, trajectory traj-regent manual step 90, 2026-09-27).
+            return tcs.Task;
         }
 
         // Clear the pending state before completing the task: TrySetResult runs the engine's
@@ -4158,11 +4164,15 @@ public partial class RunSimulator
             var sim = _bundleSimRef;
             if (sim != null)
             {
+                // The task first, then the bundles the main loop keys on, and return the local: the
+                // main loop can answer and clear both fields before this thread returns (the card
+                // selector's SetPending race, 2026-09-27).
+                var tcs = new TaskCompletionSource<IEnumerable<CardModel>>();
+                sim._pendingBundleTcs = tcs;
                 sim._pendingBundles = bundles;
-                sim._pendingBundleTcs = new TaskCompletionSource<IEnumerable<CardModel>>();
                 Console.Error.WriteLine($"[SIM] Bundle selection pending: {bundles.Count} packs");
 
-                __result = sim._pendingBundleTcs.Task;
+                __result = tcs.Task;
                 return false;
             }
 

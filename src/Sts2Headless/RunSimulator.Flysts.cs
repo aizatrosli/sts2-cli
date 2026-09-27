@@ -235,14 +235,12 @@ public partial class RunSimulator
     private Dictionary<string, object?>? _flystsNative;
     private Dictionary<string, object?>? _flystsLastPurchase;
     private bool _flystsAbandoned;
+    // The game-over screen's continue was clicked (NGameOverScreen: continue, then main menu).
+    private bool _flystsGameOverContinued;
     // Card rewards opened on the current rewards screen (MenuAutomation opens each once; a skipped
     // one stays claimable and is left behind by proceed).
     private object? _flystsRewardsScreen;
     private readonly HashSet<Reward> _flystsOpenedCardRewards = new();
-    // The rest site's buttons when an option was chosen, and whether that option opened a
-    // selection screen (FlystsRestSiteState lists them greyed after it; reset per room).
-    private List<string>? _flystsRestButtons;
-    private bool _flystsRestOverlay;
 
     private string? FlystsDecision => _flystsNative?.GetValueOrDefault("decision") as string;
 
@@ -442,6 +440,7 @@ public partial class RunSimulator
         _flystsNative = null;
         _flystsLastPurchase = null;
         _flystsAbandoned = false;
+        _flystsGameOverContinued = false;
         _flystsRewardsScreen = null;
         _flystsOpenedCardRewards.Clear();
     }
@@ -573,7 +572,6 @@ public partial class RunSimulator
         if (!_cardSelector.HasPending || _cardSelector.PendingOptions == null) return null;
         var token = _cardSelector.PendingToken;
         if (_flystsSel != null && ReferenceEquals(_flystsSel.Token, token)) return _flystsSel;
-        if (_restSiteTask != null && _runState?.CurrentRoom is RestSiteRoom) _flystsRestOverlay = true;
         _flystsSel = FlystsNewSelection(token);
         return _flystsSel;
     }
@@ -700,7 +698,25 @@ public partial class RunSimulator
                 if (!_flystsAbandoned) FlystsAbandon();
                 return FlystsResult("ok", "Abandoning run", null);
             }
-            if (_flystsAbandoned || FlystsNativeDecision() == "game_over")
+            bool gameOver = _flystsAbandoned || FlystsNativeDecision() == "game_over";
+            if (action == "menu_select" && (gameOver || (_runState.Players[0].Creature?.IsDead ?? false)))
+            {
+                // NGameOverScreen (decompiled 2026-09-27): only `continue` is enabled once the screen
+                // is up; it opens the run summary, whose end enables `main_menu`
+                // (MenuAutomation.SelectOnGameOver clicks the one asked for).
+                string? option = args?.GetValueOrDefault("option") as string;
+                if (option == "continue" && !_flystsGameOverContinued)
+                {
+                    _flystsGameOverContinued = true;
+                    return FlystsResult("ok", "Continuing to run summary", null);
+                }
+                if (option is "continue" or "main_menu")
+                    return FlystsResult("error", null, option == "continue" || !_flystsGameOverContinued
+                        ? $"Option is not available: _{(option == "continue" ? "continue" : "mainMenu")}Button"
+                        : "There is no main menu headless: start_run begins the next run");
+                return FlystsResult("error", null, "Unknown game over option: " + option + ". Use: continue, main_menu");
+            }
+            if (gameOver)
                 return FlystsResult("error", null, "No run in progress");
             var (message, error) = FlystsDispatch(action, args ?? new());
             if (error != null) return FlystsResult("error", null, error);
@@ -776,6 +792,12 @@ public partial class RunSimulator
             }
             case "shop_purchase": return FlystsShopPurchase(player, args);
             case "leave_shop":
+                if (FlystsDecision == "fake_merchant" && HeadlessUiPatches.ActiveFakeMerchant(player) != null)
+                {
+                    // NFakeMerchant's Proceed opens the map (GameActions.LeaveShop)
+                    FlystsNative("proceed", null, out err);
+                    return err == null ? ("Leaving the Fake Merchant", null) : (null, err);
+                }
                 if (_runState.CurrentRoom is not MerchantRoom || FlystsDecision != "shop") return (null, "Not in a shop");
                 FlystsNative("proceed", null, out err);
                 return err == null ? ("Leaving shop", null) : (null, err);
@@ -788,8 +810,6 @@ public partial class RunSimulator
                 SettleRestSiteTask();
                 if (index < 0 || index >= room.Options.Count) return (null, $"Rest option index {index} out of range ({room.Options.Count} options)");
                 if (_restSiteTask != null || !room.Options[index.Value].IsEnabled) return (null, $"Rest option {index} is disabled");
-                _flystsRestButtons = room.Options.Select(o => o.OptionId).ToList();
-                _flystsRestOverlay = false;
                 FlystsNative("choose_option", new() { ["option_index"] = index.Value }, out err);
                 return err == null ? ($"Selecting rest site option {index}", null) : (null, err);
             }
@@ -976,11 +996,15 @@ public partial class RunSimulator
                 if (t == null || t < 0 || t >= aliveEnemies.Count) return (null, "Potion requires 'target': a 0-based index into alive enemies");
                 target = aliveEnemies[t.Value];
             }
+            else if (potion.TargetType == TargetType.TargetedNoCreature)
+            {
+                target = null;   // thrown at a merchant (GameActions.UsePotion, NPotionHolder)
+            }
             else if (potion.TargetType.IsSingleTarget())
             {
                 target = player.Creature;
             }
-            if (target != null && !potion.IsValidTarget(target)) return (null, $"Invalid target for {potion.Id.Entry}");
+            if (!potion.IsValidTarget(target)) return (null, $"Invalid target for {potion.Id.Entry}");
             potion.EnqueueManualUse(target);
             _syncCtx.Pump();
             WaitForActionExecutor();
@@ -1004,8 +1028,14 @@ public partial class RunSimulator
 
     private (string?, string?) FlystsShopPurchase(Player player, Dictionary<string, object?> args)
     {
-        if (_runState!.CurrentRoom is not MerchantRoom merchantRoom || FlystsDecision != "shop") return (null, "Not in a shop");
-        var inventory = merchantRoom.GetLocalInventory();
+        // a merchant room's inventory, or the Fake Merchant's relic shop (GameActions.ShopPurchase)
+        MerchantInventory? inventory = FlystsDecision switch
+        {
+            "shop" when _runState!.CurrentRoom is MerchantRoom merchantRoom => merchantRoom.GetLocalInventory(),
+            "fake_merchant" => HeadlessUiPatches.ActiveFakeMerchant(player)?.Inventory,
+            _ => null,
+        };
+        if (inventory == null) return (null, "Not in a shop");
         int? index = ArgInt(args, "index");
         if (index == null) return (null, "Missing 'index'");
         var entries = inventory.AllEntries.ToList();
@@ -1090,6 +1120,10 @@ public partial class RunSimulator
         {
             var native = _flystsNative ?? FlystsCurrentNative();
             state = FlystsStateFor(native, runState, player);
+            // GameState.WithResolving: the out-of-combat screens a potion can be used on carry it;
+            // replies here are settled
+            if (!state.ContainsKey("resolving") && state.GetValueOrDefault("state_type") is "map" or "shop" or "rest_site" or "event")
+                state["resolving"] = false;
         }
         AttachFlystsRunState(state);
         return state;
@@ -1117,15 +1151,21 @@ public partial class RunSimulator
                 break;
             case "map_select":
                 return FlystsMapState(runState, player);
-            case "event_choice":
             case "fake_merchant":
+                // GameState.ActiveFakeMerchant: his custom layout is a relic shop (the event has no
+                // options); after a Foul Potion starts his fight it is an event with no options.
+                if (HeadlessUiPatches.ActiveFakeMerchant(player) is { } fm)
+                    return FlystsShopState(runState, player, fm.Inventory, fakeMerchant: true);
+                if (runState.CurrentRoom is EventRoom fer) return FlystsEventState(runState, player, fer);
+                break;
+            case "event_choice":
                 if (runState.CurrentRoom is EventRoom er) return FlystsEventState(runState, player, er);
                 break;
             case "rest_site":
                 if (runState.CurrentRoom is RestSiteRoom rr) return FlystsRestSiteState(runState, player, rr);
                 break;
             case "shop":
-                if (runState.CurrentRoom is MerchantRoom mr) return FlystsShopState(runState, player, mr);
+                if (runState.CurrentRoom is MerchantRoom mr) return FlystsShopState(runState, player, mr.GetLocalInventory(), fakeMerchant: false);
                 break;
             case "rewards":
                 return new() { ["state_type"] = "menu", ["menu_screen"] = "combat_rewards", ["message"] = "Claiming combat rewards.", ["options"] = new List<string> { "claim_and_proceed" }, ["run"] = FlystsRunInfo(runState) };

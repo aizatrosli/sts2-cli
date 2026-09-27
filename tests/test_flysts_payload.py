@@ -117,10 +117,10 @@ def rest_site(game):
     return state
 
 
-def test_rest_site_after_smith_keeps_greyed_buttons(game):
-    """The upgrade grid closing re-activates the room with no options left: Proceed enables at
-    once while HideChoices' greyed buttons stay (NRestSiteRoom.OnActiveScreenUpdated); every
-    logged live read after a Smith shows them."""
+def test_rest_site_after_smith_lists_only_proceed(game):
+    """A chosen option leaves the room's list when it succeeds, and the mod lists only buttons
+    whose option is still there (GameState.RestSiteButtons): the greyed buttons that stay until
+    the post-select VFX ends are not reported (captured live 2026-09-27, sim and animated)."""
     rest_site(game)
     r = act(game, "choose_rest_option", index=1)
     assert r["status"] == "ok" and r["state"]["state_type"] == "deck_upgrade"
@@ -128,7 +128,7 @@ def test_rest_site_after_smith_keeps_greyed_buttons(game):
     if r["state"]["state_type"] == "deck_upgrade":
         r = act(game, "confirm")
     assert r["status"] == "ok" and r["state"]["state_type"] == "rest_site"
-    assert rest_options(r["state"]) == [("HEAL", False), ("SMITH", False), ("LEAVE", True)]
+    assert rest_options(r["state"]) == [("LEAVE", True)]
     assert act(game, "choose_rest_option", index=0)["status"] == "error"
     assert act(game, "leave_rest_site")["state"]["state_type"] == "map"
 
@@ -189,16 +189,44 @@ def test_content_catalog_event_unlocks_follow_the_profile(game, tmp_path):
     assert events["OROBAS"] is True and events["NEOW"] is True
 
 
-def test_fake_merchant_lists_no_options(game):
-    """Its custom layout (NFakeMerchant) is no NEventLayout: the mod reads no option buttons,
-    not even a finished event's Proceed (docs/flysts_payload.md, known differences)."""
+def test_fake_merchant_is_a_relic_shop(game):
+    """His custom layout (NFakeMerchant) has no option buttons: the mod reads it as a shop of the
+    event's inventory (GameState.ActiveFakeMerchant); Proceed opens the map (captured live
+    2026-09-27)."""
     start(game)
+    game.send({"cmd": "set_player", "gold": 300})
     game.send({"cmd": "enter_room", "type": "event", "event": "FAKE_MERCHANT"})
     state = game.send({"cmd": "flysts_state"})["state"]
-    assert state["state_type"] == "event" and state["event_id"] == "FAKE_MERCHANT"
-    assert state["options"] == []
-    r = act(game, "choose_event_option", index=0)
-    assert r["status"] == "error" and r["state"] == state
+    assert state["state_type"] == "shop" and state["fake_merchant"] is True
+    items = state["items"]
+    assert [i["kind"] for i in items[:-1]] == ["relic"] * 6 and items[-1] == {"index": 6, "leave": True}
+    assert all(i["id"].startswith("FAKE_") for i in items[:-1])
+    assert act(game, "choose_event_option", index=0)["error"] == "No event options available"
+    r = act(game, "shop_purchase", index=0)
+    s = r["state"]
+    assert r["status"] == "ok" and s["last_purchase"]["ok"] is True
+    assert s["player"]["gold"] == 300 - items[0]["cost"] and items[0]["id"] in {x["id"] for x in s["player"]["relics"]}
+    assert s["items"][0]["in_stock"] is False and s["items"][0]["id"] == "RELIC_PENDING"
+    assert act(game, "leave_shop")["state"]["state_type"] == "map"
+
+
+def test_foul_potion_is_thrown_at_the_merchant(game):
+    """TargetedNoCreature outside combat: the game throws it at the merchant with no creature
+    (NPotionHolder -> EnqueueManualUse(null)): +100 gold in a shop, the Fake Merchant's fight at
+    his event (captured live 2026-09-27)."""
+    start(game)
+    game.send({"cmd": "set_player", "gold": 99, "potions": ["FOUL_POTION"]})
+    game.send({"cmd": "enter_room", "type": "shop"})
+    s = game.send({"cmd": "flysts_state"})["state"]
+    assert s["player"]["potion_slots_detail"][0]["usable"] is True
+    r = act(game, "use_potion", slot=0)
+    assert r["status"] == "ok" and r["state"]["player"]["gold"] == 199, r
+    start(game)
+    game.send({"cmd": "set_player", "potions": ["FOUL_POTION"]})
+    game.send({"cmd": "enter_room", "type": "event", "event": "FAKE_MERCHANT"})
+    r = act(game, "use_potion", slot=0)
+    assert r["status"] == "ok" and r["state"]["state_type"] == "monster", r
+    assert [m["id"] for m in r["state"]["monsters"]] == ["FAKE_MERCHANT_MONSTER"]
 
 
 def test_kaiser_crab_fight_runs(game):
@@ -515,6 +543,18 @@ def test_abandon_run_kills_the_player_like_the_game(game):
         assert s["player"]["hp"] == 0 and s["abandoned"] is True and s["cause"] == "AbandonedRun", s
         assert isinstance(s["run_time"], int)
         assert act(game, "end_turn")["error"] == "No run in progress"
+
+
+def test_game_over_screen_continue_then_main_menu(game):
+    """NGameOverScreen: `continue` is the enabled button once the screen is up; it opens the run
+    summary, whose end enables `main_menu` (captured live 2026-09-27: settled reads `continue`)."""
+    start(game)
+    s = act(game, "abandon_run")["state"]
+    assert s["options"] == ["continue"]
+    assert act(game, "menu_select", option="main_menu")["status"] == "error"
+    r = act(game, "menu_select", option="continue")
+    assert r["status"] == "ok" and r["state"]["options"] == ["main_menu"]
+    assert "start_run" in act(game, "menu_select", option="main_menu")["error"]
 
 
 def test_play_time_hit_counts_and_glows(game):
